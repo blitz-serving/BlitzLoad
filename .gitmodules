@@ -1,0 +1,7 @@
+[submodule "third_party/pickle"]
+	path = third_party/pickle
+	url = https://github.com/blitz-serving/pickle.git
+[submodule "third_party/spdlog"]
+	path = third_party/spdlog
+	url = https://github.com/gabime/spdlog.git
+	branch = v1.15.3
