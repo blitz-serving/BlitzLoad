@@ -39,10 +39,6 @@ public:
     ftruncate(fd, size);
     void *addr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
-    // shm_buffers_.emplace(std::make_pair(name, ShmBuffer{addr, size}));
-    // shm_buffers_.emplace(std::piecewise_construct,
-    //                      std::forward_as_tuple("buffer1"),
-    //                      std::forward_as_tuple(addr, size));
     shm_buffers_[name] = {addr, size, 0};
     return addr;
   }

@@ -37,7 +37,7 @@ public:
 
   static void *register_buffer(size_t size,
                                const std::string &shm_name = "haha") {
-    assert(inited == true);
+    LOG_ASSERT(inited == true, "Hasn't inited, call DataMover.init to init");
     if (get_instance().mode_ == Mode::GPU) {
       return get_instance().mem_manager_.register_gpu_buffer(size);
     } else {
@@ -47,7 +47,7 @@ public:
 
   static void load_file_to_buffer_sync(const std::string &shm_name,
                                        std::vector<std::string> weight_files) {
-    LOG_ASSERT(inited == true, "Hasn't inited");
+    LOG_ASSERT(inited == true, "Hasn't inited, call DataMover.init to init");
     auto &instance = get_instance();
     auto it = instance.mem_manager_.shm_buffers_.find(shm_name);
     if (it == instance.mem_manager_.shm_buffers_.end()) {
@@ -106,28 +106,6 @@ public:
     }
     std::cout << it->second.size << " " << it->second.read_offset;
   }
-
-  // static void
-
-  // static void
-
-  // static void fetch_data_async(void *dst_gpu_ptr, const std::string
-  // &shm_name,
-  //                              size_t size) {
-  //   auto &instance = get_instance();
-  //   auto it = instance.mem_manager_.shm_buffers_.find(shm_name);
-  //   if (it == instance.mem_manager_.shm_buffers_.end()) {
-  //     std::cerr << "SHM buffer not found: " << shm_name << std::endl;
-  //     return;
-  //   }
-  //   void *src = it->second.addr;
-
-  //   {
-  //     std::lock_guard<std::mutex> lk(instance.queue_mutex_);
-  //     instance.task_queue_.push({dst_gpu_ptr, src, size});
-  //   }
-  //   instance.cv_.notify_one();
-  // }
 
   DataMover() {}
 

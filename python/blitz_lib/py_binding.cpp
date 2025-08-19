@@ -1,12 +1,11 @@
+#include <torch/extension.h> // 必须在 pybind11 相关头文件之前
+#include "../include/data_mover.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include <torch/extension.h> // 必须在 pybind11 前面
-
-#include "../include/data_mover.hpp"
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(datamover, m) {
+PYBIND11_MODULE(_blitz_lib, m) {
   m.doc() = "Python bindings for DataMover";
 
   // 先暴露 Mode 枚举
