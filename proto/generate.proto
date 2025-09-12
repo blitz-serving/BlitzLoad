@@ -1,0 +1,27 @@
+syntax = "proto2";
+
+package generate.v2;
+
+
+service ParamService {
+    // Request to load model from repo
+    rpc PullModel(PullModelRequest) returns (PullModelResponse) {}
+    // Request to load weights to torch.Tensor, engine returns a shm/gpu ptr, clients to move data
+    rpc LoadWeight(LoadWeightRequest) returns (LoadWeightResponse) {}
+}
+
+
+
+message PullModelRequest {
+    // model name or path
+    required string model_name = 1;
+}
+message PullModelResponse {}
+
+message LoadWeightRequest{
+    required bytes ipc_handle = 1;
+    required uint64 tensor_size = 2;
+    required uint32 tensor_device = 3;
+    required string tensor_name = 4;
+}
+message LoadWeightResponse{}

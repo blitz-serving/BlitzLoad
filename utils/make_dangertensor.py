@@ -5,6 +5,8 @@ import struct
 import json
 from typing import List
 
+tensor_map = []
+
 
 def generate_tensor_order(nlayers):
     tensor_order = [
@@ -77,7 +79,9 @@ def process_and_write_tensors(
 
     for tp_rank in range(tp_size):
         filename = "dangertensors.{}.bin".format(tp_rank)
+        metaname = "dangertensors.{}.meta".format(tp_rank)
         output_file = os.path.join(output_path, filename)
+        meta_file = os.path.join(output_path, metaname)
         with open(output_file, "wb") as f:
             tensor_order_it = iter(tensor_order)
             for tensor_name in tensor_order_it:
@@ -193,10 +197,13 @@ def process_and_write_tensors(
                     tensors.append(tensor)
                     assert len(tensor.shape) == 1
                 # 将张量转换为 NumPy 数组，以便更轻松地处理数据类型
+                tensor_map.append(
+                    (tensor_name, tensor_slice.element_size() * tensor_slice.nelement())
+                )
                 for tensor in tensors:
-                    print(
-                        f"Name: {tensor_name}, dtype: {tensor.dtype}, shape: {tensor.shape}"
-                    )
+                    # print(
+                    #     f"Name: {tensor_name}, dtype: {tensor.dtype}, shape: {tensor.shape}"
+                    # )
                     try:
                         uint8_tensor = tensor.view(torch.uint8)
                     except Exception:
@@ -207,11 +214,15 @@ def process_and_write_tensors(
                     np_array = uint8_tensor.numpy()
                     bytes_data = np_array.tobytes()
                     f.write(bytes_data)
-                    # print(bytes_data)
+                print("==========================")
+                # print(tensor_map)
+            with open(meta_file, "w") as ff:
+                ff.write(f"{len(tensor_map)}\n")
+                for (name, size) in tensor_map:
+                    ff.write(f"{name} {size}\n") 
+                #     # print(bytes_data)
 
                 # for tensor in tensors:
-
-                print("==========================")
 
                 # 写入张量数据
                 # tensor_bytes = tensor_np.tobytes()
@@ -226,7 +237,7 @@ if __name__ == "__main__":
     # model_name = 'Llama-2-7b-chat-hf'
     # model_name = 'DeepSeek-R1-Distill-Llama-8B'
     # model_name = "Mistral-Small-24B-Instruct-2501"
-    model_name = "Meta-Llama-3-8B-Instruct"
+    model_name = "Qwen3-8B"
     model_directory = "/nvme/models/{}".format(model_name)
     output_path = "/nvme/ly/tmp_files"
     tensor_order = generate_tensor_order(32)

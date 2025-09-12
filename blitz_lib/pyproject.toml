@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blitz_lib"
+version = "0.1.0"
+description = "Blitz client library for parameter engine via gRPC and CUDA IPC"
+authors = [
+    {name = "green_egg", email = "green_egg@sjtu.edu.cn"}
+]
+dependencies = [
+    "torch",
+    "grpcio",
+    "grpcio-tools"
+]
+requires-python = ">=3.10"
