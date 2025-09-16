@@ -9,7 +9,6 @@
 #include <logger.h>
 #include <memory>
 #include <mutex>
-#include <spin_mutex.hpp>
 #include <vector>
 
 namespace blitz::buffer {

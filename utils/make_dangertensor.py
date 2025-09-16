@@ -1,40 +1,50 @@
 import os
 import safetensors.torch
+from safetensors import safe_open
 import torch
 import struct
 import json
+import re
 from typing import List
 
-tensor_map = []
+tensor_vec = []
 
 
-def generate_tensor_order(nlayers):
-    tensor_order = [
-        "model.embed_tokens.weight",
-    ]
-    for i in range(nlayers):
-        tensor_order_p = [
-            "model.layers.{}.input_layernorm.weight",
-            "model.layers.{}.self_attn.q_proj.weight",
-            "model.layers.{}.self_attn.k_proj.weight",
-            "model.layers.{}.self_attn.v_proj.weight",
-            "model.layers.{}.self_attn.o_proj.weight",
-            "model.layers.{}.post_attention_layernorm.weight",
-            "model.layers.{}.mlp.gate_proj.weight",
-            "model.layers.{}.mlp.up_proj.weight",
-            "model.layers.{}.mlp.down_proj.weight",
-        ]
-        tensor_order += list(map(lambda p: p.format(i), tensor_order_p))
-    tensor_order += [
-        "model.norm.weight",
-        "lm_head.weight",
-    ]
-    return tensor_order
+def get_safetensor_files(dir):
+    files = [f for f in os.listdir(dir) if f.endswith(".safetensors")]
+    files.sort(
+        key=lambda x: [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", x)]
+    )
+    return [os.path.join(dir, f) for f in files]
 
 
-def process_and_write_tensors(
-    directory, output_path, tensor_order: List[str], tp_size: int
-):
+def extract_layer_id(tensor_name: str):
+    match = re.search(r"(?:layers|h)\.(\d+)", tensor_name)
+    if match:
+        return int(match.group(1))
+    else:
+        raise "Cannot extract layer id"
+
+
+def dump_tensor(tensor, tensor_name):
+    if "embed" not in tensor_name:
+        return
+    try:
+        if not tensor.is_contiguous():
+            uint8_tensor = tensor.contiguous().view(torch.uint8)
+        else:
+            uint8_tensor = tensor.view(torch.uint8)
+    except Exception:
+        # not contiguous, using clone
+        uint8_tensor = tensor.clone().view(torch.uint8)
+    np_array = uint8_tensor.numpy()
+    bytes_data = np_array.tobytes()
+    with open(f"/tmp/vllm/danger-{tensor_name}.bin", "wb") as f:
+        f.write(bytes_data)
+        f.close()
+
+
+def process_and_write_tensors(directory, output_path, safetensor_files, tp_size: int):
     """
     读取指定目录下所有 safetensors 文件，转置所有 2D 张量，并按指定顺序写入二进制文件。
 
@@ -45,6 +55,7 @@ def process_and_write_tensors(
     """
 
     all_tensors = {}
+    all_tensors_name = []
     config_file = os.path.join(directory, "config.json")
     with open(config_file, "r") as f:
         config = json.load(f)
@@ -59,23 +70,22 @@ def process_and_write_tensors(
     num_qo_head = config["num_attention_heads"]
     num_kv_head = config["num_key_value_heads"]
 
-    print(f"hidden_size: {hidden_size}, inter_size: {inter_size}, head_dim: {head_dim}")
-
-    for filename in os.listdir(directory):
-        if filename.endswith(".safetensors"):
-            filepath = os.path.join(directory, filename)
-            try:
-                tensors = safetensors.torch.load_file(filepath)
-                all_tensors.update(tensors)  # 将所有张量添加到字典中
-            except Exception as e:
-                print(f"Error loading {filename}: {e}")
-                return
-
-    # 检查 tensor_order 中是否存在所有张量名称
-    for tensor_name in tensor_order:
-        if tensor_name not in all_tensors:
-            print(f"Error: Tensor '{tensor_name}' not found in safetensors files.")
+    for filename in safetensor_files:
+        try:
+            with safe_open(filename, framework="pt") as f:
+                for name in f.keys():
+                    tensor = f.get_tensor(name)
+                    all_tensors[name]= tensor  # 将所有张量添加到字典中
+                    all_tensors_name.append(name)
+            # tensors = safetensors.torch.load_file(filename)
+        except Exception as e:
+            print(f"Error loading {filename}: {e}")
             return
+
+    for name in all_tensors_name:
+        print(name)
+
+    # return
 
     for tp_rank in range(tp_size):
         filename = "dangertensors.{}.bin".format(tp_rank)
@@ -83,19 +93,22 @@ def process_and_write_tensors(
         output_file = os.path.join(output_path, filename)
         meta_file = os.path.join(output_path, metaname)
         with open(output_file, "wb") as f:
-            tensor_order_it = iter(tensor_order)
+            tensor_order_it = iter(all_tensors_name)
             for tensor_name in tensor_order_it:
                 tensor = all_tensors[tensor_name]
                 tensors = []
+                is_qkv_or_gateup = False
                 print(f"[INIT] Name: {tensor_name}, shape: {tensor.shape}")
 
+                # layer_id = extract_layer_id(tensor_name)
                 if len(tensor.shape) == 2:
                     # NOTE: fuse gate & up proj
                     if "gate_proj" in tensor_name:
+                        # cat an push to tensors
+                        is_qkv_or_gateup = True
+                        up_tensor_name = tensor_name.replace("gate_proj", "up_proj")
                         gate_tensor = tensor
-                        up_tensor = all_tensors[next(tensor_order_it)]
-                        assert gate_tensor.shape == up_tensor.shape
-
+                        up_tensor = all_tensors[up_tensor_name]
                         gate_tensor_slice = gate_tensor[
                             (tp_rank * (inter_size // tp_size)) : (
                                 (tp_rank + 1) * (inter_size // tp_size)
@@ -108,14 +121,11 @@ def process_and_write_tensors(
                             ),
                             :,
                         ]
-                        result = torch.cat((gate_tensor_slice, up_tensor_slice), dim=0)
-                        # result = torch.transpose(
-                        #     torch.cat((gate_tensor_slice, up_tensor_slice), dim=0), 0, 1
-                        # )
+                        result = torch.cat([gate_tensor_slice, up_tensor_slice])
                         result = result.contiguous()
-                        tensors.append(result)
-                        tensor_name = tensor_name.replace("gate_proj", "gate_up_proj")
-                        print("------------------------")
+                        tensors.append((up_tensor_name, result))
+                    elif "up_proj" in tensor_name:
+                        is_qkv_or_gateup = True
                     # down_proj
                     elif "down_proj" in tensor_name:
                         tensor_slice = tensor[
@@ -126,7 +136,7 @@ def process_and_write_tensors(
                         ]
                         # tensor_slice = torch.transpose(tensor_slice, 0, 1)
                         tensor_slice = tensor_slice.contiguous()
-                        tensors.append(tensor_slice)
+                        tensors.append((tensor_name, tensor_slice))
                     else:
                         if "lm_head" in tensor_name:
                             # [vocab_size, hidden_size]
@@ -140,7 +150,7 @@ def process_and_write_tensors(
                             ]
                             # tensor_slice = torch.transpose(tensor_slice, 0, 1)
                             tensor_slice = tensor_slice.contiguous()
-                            tensors.append(tensor_slice)
+                            tensors.append((tensor_name, tensor_slice))
                         elif "embed" in tensor_name:
                             # [vocab_size, hidden_size]
                             assert (vocab_size, hidden_size) == tensor.shape
@@ -152,7 +162,7 @@ def process_and_write_tensors(
                                 :,
                             ]
                             tensor_slice = tensor_slice.contiguous()
-                            tensors.append(tensor_slice)
+                            tensors.append((tensor_name, tensor_slice))
                         else:
                             assert "self_attn" in tensor_name
                             assert num_qo_head % tp_size == 0
@@ -169,6 +179,7 @@ def process_and_write_tensors(
                                     * head_dim,
                                 ]
                             elif "q_proj" in tensor_name:
+                                is_qkv_or_gateup = True
                                 # [num_qo_head * head_size, hidden_size]
                                 slice_head_num = num_qo_head // tp_size
                                 start_head_idx = tp_rank * slice_head_num
@@ -178,29 +189,52 @@ def process_and_write_tensors(
                                     * head_dim,
                                     :,
                                 ]
-                            else:
-                                # [num_kv_head * head_size, hidden_size]
-                                slice_head_num = num_kv_head // tp_size
-                                start_head_idx = tp_rank * slice_head_num
-                                tensor_slice = tensor[
+
+                                k_tensor = all_tensors[
+                                    tensor_name.replace("q_proj", "k_proj")
+                                ]
+                                v_tensor = all_tensors[
+                                    tensor_name.replace("q_proj", "v_proj")
+                                ]
+                                k_tensor_slice = k_tensor[
                                     start_head_idx
                                     * head_dim : (start_head_idx + slice_head_num)
                                     * head_dim,
                                     :,
                                 ]
+                                v_tensor_slice = v_tensor[
+                                    start_head_idx
+                                    * head_dim : (start_head_idx + slice_head_num)
+                                    * head_dim,
+                                    :,
+                                ]
+                                result = torch.cat(
+                                    [tensor_slice, k_tensor_slice, v_tensor_slice],
+                                    dim=0,
+                                )
+                                tensors.append(
+                                    (tensor_name.replace("q_proj", "v_proj"), result)
+                                )
+                            else:
+                                is_qkv_or_gateup = True
                             # tensor_slice = torch.transpose(tensor_slice, 0, 1)
-                            tensor_slice = tensor_slice.contiguous()
-                            tensors.append(tensor_slice)
+                            if is_qkv_or_gateup == False:
+                                tensor_slice = tensor_slice.contiguous()
+                                tensors.append((tensor_name, tensor_slice))
+
                         print("========================")
                 else:
                     # 1-D tensor
-                    tensors.append(tensor)
+                    tensors.append((tensor_name, tensor))
                     assert len(tensor.shape) == 1
                 # 将张量转换为 NumPy 数组，以便更轻松地处理数据类型
-                tensor_map.append(
-                    (tensor_name, tensor_slice.element_size() * tensor_slice.nelement())
-                )
-                for tensor in tensors:
+                for name, tensor in tensors:
+                    print(
+                        f"Tensor {name} ele_size {tensor.element_size()} n {tensor.nelement()}"
+                    )
+                    tensor_vec.append(
+                        (name, tensor.element_size() * tensor.nelement())
+                    )
                     # print(
                     #     f"Name: {tensor_name}, dtype: {tensor.dtype}, shape: {tensor.shape}"
                     # )
@@ -214,12 +248,15 @@ def process_and_write_tensors(
                     np_array = uint8_tensor.numpy()
                     bytes_data = np_array.tobytes()
                     f.write(bytes_data)
+                    # if name == "model.layers.0.mlp.down_proj.weight":
+                    #     with open(f"/tmp/vllm/danger-{name}.bin", "wb") as g:
+                    #         g.write(bytes_data)
                 print("==========================")
                 # print(tensor_map)
             with open(meta_file, "w") as ff:
-                ff.write(f"{len(tensor_map)}\n")
-                for (name, size) in tensor_map:
-                    ff.write(f"{name} {size}\n") 
+                ff.write(f"{len(tensor_vec)}\n")
+                for name, size in tensor_vec:
+                    ff.write(f"{name} {size}\n")
                 #     # print(bytes_data)
 
                 # for tensor in tensors:
@@ -240,6 +277,8 @@ if __name__ == "__main__":
     model_name = "Qwen3-8B"
     model_directory = "/nvme/models/{}".format(model_name)
     output_path = "/nvme/ly/tmp_files"
-    tensor_order = generate_tensor_order(32)
+    # tensor_order = generate_tensor_order(32)
     tp_size = 1
-    process_and_write_tensors(model_directory, output_path, tensor_order, tp_size)
+    process_and_write_tensors(
+        model_directory, output_path, get_safetensor_files(model_directory), tp_size
+    )

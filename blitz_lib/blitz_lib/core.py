@@ -2,6 +2,8 @@ import grpc
 import torch
 import ctypes
 
+import functools
+import inspect
 from . import generate_pb2
 from . import generate_pb2_grpc
 
@@ -59,7 +61,7 @@ def send_grpc_call_to_server(
     if not param.is_cuda:
         raise ValueError("param must on cuda device")
 
-    tensor_size = param.numel()
+    tensor_size = param.nelement()
     dtype_size = param.element_size()
     device = param.device.index
     nbytes = tensor_size * dtype_size
@@ -87,3 +89,57 @@ def pull_model(model_name: str, server_addr: str = "localhost:60060"):
     stub = _get_stub(server_addr)
     req = generate_pb2.PullModelRequest(model_name=model_name)
     return stub.PullModel(req)
+
+
+def _dump_tensor(tensor, tensor_name):
+    if "embed" not in tensor_name:
+        return
+    tensor = tensor.cpu()
+    try:
+        if not tensor.is_contiguous():
+            uint8_tensor = tensor.contiguous().view(torch.uint8)
+        else:
+            uint8_tensor = tensor.view(torch.uint8)
+    except Exception:
+        # not contiguous, using clone
+        uint8_tensor = tensor.clone().view(torch.uint8)
+    np_array = uint8_tensor.numpy()
+    bytes_data = np_array.tobytes()
+    with open(f"/tmp/vllm/{tensor_name}.bin", "wb") as f:
+        f.write(bytes_data)
+        f.close()
+
+
+def vllm_hook(func):
+    sig = inspect.signature(func)
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+
+        param_names = list(sig.parameters.keys())
+        name = param_names[1]
+        val = bound.arguments[name]
+        send_grpc_call_to_server(val, "")
+        _dump_tensor(val, bound.arguments[param_names[0]].prefix)
+
+    return wrapper
+
+
+def vllm_dumper(func):
+    sig = inspect.signature(func)
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+
+        param_names = list(sig.parameters.keys())
+        name = param_names[1]
+        val = bound.arguments[name]
+        # _dump_tensor(val, bound.arguments[param_names[0]].prefix)
+        return result
+
+    return wrapper

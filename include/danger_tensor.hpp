@@ -145,8 +145,8 @@ public:
                  "Cannot find tensor {}", tensor_name);
       auto [offset, length, _name] = metas_map[tensor_name];
       LOG_ASSERT(length == tensor_length,
-                 "Input tensor_length {} != metas's tensor_length {}",
-                 tensor_length, length);
+                 "Input tensor_length {} != metas's tensor_length {} ({})",
+                 tensor_length, length, tensor_name);
 
       spdlog::info("Loading tensor {}, length {}", tensor_name, tensor_length);
       cudaMemcpyAsync(tensor_ptr, host_weight_segment + offset, tensor_length,
@@ -161,9 +161,15 @@ public:
                  "Input tensor_length {} != metas's tensor {}, length {}",
                  tensor_length, name, length);
       spdlog::info("Loading tensor {}, length {}", name, tensor_length);
-      cudaMemcpyAsync(tensor_ptr, host_weight_segment + offset, tensor_length,
-                      cudaMemcpyHostToDevice, 0);
-      CUDA_CHECK(cudaStreamSynchronize(0));
+      // if (tensor_length > 1024 * 1024 * 1024) {
+      cudaMemcpy(tensor_ptr, host_weight_segment + offset, tensor_length,
+                 cudaMemcpyHostToDevice);
+      // } else {
+      //   cudaMemcpyAsync(tensor_ptr, host_weight_segment + offset,
+      //   tensor_length,
+      //                   cudaMemcpyHostToDevice, 0);
+      //   CUDA_CHECK(cudaStreamSynchronize(0));
+      // }
     }
   }
 
