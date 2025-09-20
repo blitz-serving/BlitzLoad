@@ -3,6 +3,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <grpcpp/grpcpp.h>
+#include <grpcpp/server_context.h>
+#include <grpcpp/support/status.h>
 #include <iostream>
 #include <memory>
 #include <regex>
@@ -65,8 +67,8 @@ public:
     } catch (const std::exception &e) {
       spdlog::error("Error: {}", e.what());
     }
-    engine_ptr->ssd_to_mem(bin_files);
-    // engine_ptr->mem_to_buffer(files);
+    auto shard_num = engine_ptr->ssd_to_mem(bin_files);
+    engine_ptr->mem_to_buffer(shard_num);
 
     return Status::OK;
   }
@@ -77,13 +79,32 @@ public:
     cudaIpcMemHandle_t handle;
     const std::string &serialized_handle = req->ipc_handle();
     memcpy(&handle, serialized_handle.data(), sizeof(handle));
-    spdlog::info("Get handle success");
     engine_ptr->mem_to_tensor(handle, req->tensor_name(), req->tensor_size(),
                               req->tensor_device());
 
     // engine_ptr->buffer_to_tensor(handle, req->tensor_device(),
     //                              req->tensor_size());
 
+    return Status::OK;
+  }
+
+  Status GetHandler(ServerContext *ctx, const GetHandlerRequest *req,
+                    GetHandlerResponse *resp) override {
+    (void)ctx;
+    cudaIpcMemHandle_t handle;
+    // FIXME: hard code shard_id = 0
+    auto loaded_size =
+        engine_ptr->export_handler(&handle, req->tensor_size(), 0);
+    resp->set_ipc_handler(reinterpret_cast<const char *>(&handle),
+                          sizeof(handle));
+    resp->set_loaded_size(loaded_size);
+    return Status::OK;
+  }
+
+  // FIXME: hard code shard_id = 0
+  Status RevertHandler(ServerContext *ctx, const RevertHandlerRequest *req,
+                       RevertHandlerResponse *resp) override {
+    engine_ptr->free_handler(req->tensor_size(), 0);
     return Status::OK;
   }
 
@@ -95,7 +116,7 @@ private:
 } // namespace generate
 
 static void RunServer(const std::string &addr) {
-  std::vector<int> devices = {7};
+  std::vector<int> devices = {0};
   generate::v2::ParamServiceImpl service(devices);
 
   grpc::EnableDefaultHealthCheckService(true);

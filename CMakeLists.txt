@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.15...4.0)
 project(CppMemoryManager LANGUAGES CXX CUDA)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# add_definitions(-DSPDLOG_FMT_EXTERNAL=0)
 # add_compile_options(-w)
 
 option(BUILD_TESTS "whether to build tests" OFF)
@@ -26,6 +27,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 set(CMAKE_BUILD_TYPE Debug)
 add_subdirectory(third_party/spdlog)
+include_directories(BEFORE ${CMAKE_SOURCE_DIR}/third_party/spdlog/include)
 include_directories(${CMAKE_SOURCE_DIR}/include ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
 # ----Engine----
@@ -64,7 +66,7 @@ target_compile_options(textgen_proto PRIVATE -fPIC)
 
 add_executable(server src/server.cc src/blitz_engine.cc)
 target_include_directories(server PUBLIC "${GEN_DIR}" ${TORCH_INCLUDE_DIRS})
-target_link_libraries(server PUBLIC textgen_proto ${Protobuf_LIBRARIES} ${TORCH_LIBRARIES} spdlog::spdlog_header_only)
+target_link_libraries(server PUBLIC textgen_proto ${Protobuf_LIBRARIES} ${TORCH_LIBRARIES})
 
 # ----C++ Test----
 # if(BUILD_TESTS)

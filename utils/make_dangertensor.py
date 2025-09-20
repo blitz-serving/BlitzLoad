@@ -275,7 +275,7 @@ if __name__ == "__main__":
     # model_name = 'DeepSeek-R1-Distill-Llama-8B'
     # model_name = "Mistral-Small-24B-Instruct-2501"
     model_name = "Qwen3-8B"
-    model_directory = "/nvme/models/{}".format(model_name)
+    model_directory = "/nvme/ly/models/{}".format(model_name)
     output_path = "/nvme/ly/tmp_files"
     # tensor_order = generate_tensor_order(32)
     tp_size = 1

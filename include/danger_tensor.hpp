@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <cuda_bf16.h>
 #include <fcntl.h>
 #include <fstream>
 #include <future>
@@ -130,6 +131,39 @@ public:
     file_read_mtx.unlock();
   }
 
+  std::pair<size_t, bool> mem_to_buffer(void *buffer_ptr, size_t buffer_size,
+                                        size_t buffer_read_size) {
+    LOG_ASSERT(valid, "File hasn't been loaded");
+    auto it = std::upper_bound(
+        metas_vec.begin(), metas_vec.end(), buffer_read_size,
+        [](size_t value, const MetaData &item) { return value < item.offset; });
+    if (it != metas_vec.begin())
+      it--;
+
+    size_t loaded_size = 0, start_offset = buffer_read_size,
+           first_tensor_offset = buffer_read_size - it->offset;
+    while (it != metas_vec.end() &&
+           loaded_size + it->data_length - first_tensor_offset <= buffer_size) {
+      auto ls = it->data_length - first_tensor_offset;
+      loaded_size += ls;
+      first_tensor_offset = 0;
+      spdlog::info("Loading {}", it->name);
+      it++;
+    }
+    if (it != metas_vec.end() && loaded_size == 0 &&
+        it->data_length > buffer_size) {
+      // single tensor size > buffer size, truncate
+      spdlog::info("Should truncate tensor {}", it->name);
+      loaded_size = buffer_size;
+    }
+    spdlog::info("load size: {}:{}, read done: {}", loaded_size, buffer_size,
+                 it == metas_vec.end());
+    CUDA_CHECK(cudaMemcpyAsync(buffer_ptr, host_weight_segment + start_offset,
+                               loaded_size, cudaMemcpyHostToDevice, 0));
+    CUDA_CHECK(cudaStreamSynchronize(0));
+    return {loaded_size, it == metas_vec.end()};
+  }
+
   void mem_to_tensor(cudaIpcMemHandle_t &handle, std::string tensor_name,
                      size_t tensor_length, int tensor_device) {
     LOG_ASSERT(valid, "File hasn't been loaded");
@@ -149,9 +183,16 @@ public:
                  tensor_length, length, tensor_name);
 
       spdlog::info("Loading tensor {}, length {}", tensor_name, tensor_length);
-      cudaMemcpyAsync(tensor_ptr, host_weight_segment + offset, tensor_length,
-                      cudaMemcpyHostToDevice, 0);
-      CUDA_CHECK(cudaStreamSynchronize(0));
+      CUDA_CHECK(cudaMemcpy(tensor_ptr, host_weight_segment + offset,
+                            tensor_length, cudaMemcpyHostToDevice));
+      if (tensor_name.find("norm") != std::string::npos) {
+        // check norm value, get first value
+        __nv_bfloat16 first_val;
+        CUDA_CHECK(cudaMemcpy(&first_val, tensor_ptr, sizeof(__nv_bfloat16),
+                              cudaMemcpyDeviceToHost));
+        spdlog::info("First value of {} is {}", tensor_name,
+                     __bfloat162float(first_val));
+      }
     } else {
       // sequential mode
       mode = SEQ;
@@ -162,15 +203,19 @@ public:
                  tensor_length, name, length);
       spdlog::info("Loading tensor {}, length {}", name, tensor_length);
       // if (tensor_length > 1024 * 1024 * 1024) {
-      cudaMemcpy(tensor_ptr, host_weight_segment + offset, tensor_length,
-                 cudaMemcpyHostToDevice);
-      // } else {
-      //   cudaMemcpyAsync(tensor_ptr, host_weight_segment + offset,
-      //   tensor_length,
-      //                   cudaMemcpyHostToDevice, 0);
-      //   CUDA_CHECK(cudaStreamSynchronize(0));
-      // }
+      CUDA_CHECK(cudaMemcpy(tensor_ptr, host_weight_segment + offset,
+                            tensor_length, cudaMemcpyHostToDevice));
+
+      if (name.find("norm") != std::string::npos) {
+        // check norm value, get first value
+        __nv_bfloat16 first_val;
+        CUDA_CHECK(cudaMemcpy(&first_val, tensor_ptr, sizeof(__nv_bfloat16),
+                              cudaMemcpyDeviceToHost));
+        spdlog::info("First value of {} is {}", name,
+                     __bfloat162float(first_val));
+      }
     }
+    cudaIpcCloseMemHandle(tensor_ptr);
   }
 
 private:

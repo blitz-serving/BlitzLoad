@@ -3,10 +3,12 @@
 #include "spdlog/spdlog.h"
 #include <algorithm>
 #include <blitz_engine.h>
+#include <condition_variable>
 #include <cstddef>
 #include <filesystem>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <regex>
 #include <string>
 #include <thread>
@@ -18,16 +20,27 @@ namespace fs = std::filesystem;
 BlitzEngine::BlitzEngine(std::vector<int> buf_devices_, size_t buf_size) {
   std::sort(buf_devices_.begin(), buf_devices_.end());
   this->buf_devices = buf_devices_;
+  spdlog::info("Buffer size: {}, {}", buf_devices_.size(),
+               this->buf_devices.size());
   // create buf2tensor stream
   CUDA_CHECK(cudaStreamCreate(&this->buf2tensor_stream));
   auto device_iter = buf_devices_.begin();
 
   while (device_iter != buf_devices_.end()) {
-    bufs.emplace_back(std::make_unique<buffer::BufferGroup>(
+    buf_groups.emplace_back(std::make_unique<buffer::BufferGroup>(
         2, buf_size, &buf2tensor_stream, *device_iter));
     device_iter++;
   }
   this->enable_p2p_access(buf_devices_);
+  for (size_t i = 0; i < buf_devices_.size(); i++) {
+    is_empty.push_back(true);
+    mtxs.push_back(std::make_unique<std::mutex>());
+    cvs.push_back(std::make_unique<std::condition_variable>());
+  }
+  spdlog::info("length: mtx: {}, cv: {}, is_empty: {}", mtxs.size(), cvs.size(),
+               is_empty.size());
+  auto test = cvs[0].get();
+  test->notify_one();
 }
 
 void BlitzEngine::enable_p2p_access(std::vector<int> devices) {
@@ -54,43 +67,57 @@ void BlitzEngine::mem_to_tensor(cudaIpcMemHandle_t &handle,
                                      tensor_device);
 }
 
+// FIXME: suppose engine only loads one model
 void BlitzEngine::buffer_to_tensor(cudaIpcMemHandle_t &handle,
-                                   int tensor_device, size_t tensor_size) {
-  LOG_ASSERT(false, "Cannot use this func now");
-  auto iter = std::find(buf_devices.begin(), buf_devices.end(), tensor_device);
-  int idx = 0;
-  if (iter != buf_devices.end()) {
-    idx = std::distance(iter, buf_devices.begin());
+                                   int tensor_device, size_t tensor_size,
+                                   int shard_id) {
+  LOG_ASSERT(std::find(buf_devices.begin(), buf_devices.end(), tensor_device) !=
+                 buf_devices.end(),
+             "Hasn't access p2p");
+  auto status = buf_groups[shard_id]->buffer_to_tensor(handle, tensor_size,
+                                                       tensor_device);
+  if (status == buffer::EMPTY) {
+    is_empty[shard_id] = 1;
+    cvs[shard_id]->notify_one();
   }
-  auto status = bufs[idx]->buffer_to_tensor(handle, tensor_size, tensor_device);
 }
 
-void BlitzEngine::mem_to_buffer(std::vector<std::string> files) {
-  LOG_ASSERT(false, "Cannot use this func now");
-  auto idx = 0;
-  for (auto &file : files) {
-    threads.emplace_back(std::thread([this, file, idx]() {
-      int shard_id = -1;
-      std::regex pattern(R"(dangertensors\.(\d+)\.bin)");
-      std::smatch match;
-      if (std::regex_match(file, match, pattern)) {
-        shard_id = std::stoi(match[1].str());
-      }
+size_t BlitzEngine::export_handler(cudaIpcMemHandle_t *handle,
+                                   size_t tensor_size, int shard_id) {
+  return buf_groups[shard_id]->export_handler(handle, tensor_size);
+}
+
+void BlitzEngine::free_handler(size_t tensor_size, int shard_id) {
+  buf_groups[shard_id]->free_handler(tensor_size);
+}
+
+void BlitzEngine::mem_to_buffer(int shard_num) {
+  for (int shard_id = 0; shard_id < shard_num; shard_id++) {
+    threads.emplace_back(std::thread([this, shard_id]() {
+      // auto cv = cvs[shard_id].get();
       while (true) {
-        auto status =
-            this->bufs[idx]->mem_to_buffer(*dangertensor_map[shard_id]);
+        // std::unique_lock<std::mutex> lock(*mtxs[shard_id]);
+        // spdlog::info("{} is Waiting", shard_id);
+        // cv->wait(lock,
+        //  [this, shard_id] { return this->is_empty[shard_id] == 1; });
+        // spdlog::info("{} is wait done", shard_id);
+        auto status = this->buf_groups[shard_id]->mem_to_buffer(
+            *dangertensor_map[shard_id]);
         if (status == buffer::END) {
-          spdlog::info("Buffers[{}] load done", idx);
+          spdlog::info("Buffers[{}] load done", shard_id);
           break;
+        }
+        if (status == buffer::READY || status == buffer::END ||
+            status == buffer::LOADED) {
+          is_empty[shard_id] = 0;
         }
         std::this_thread::yield();
       }
     }));
-    idx += 1;
   }
 }
 
-void BlitzEngine::ssd_to_mem(std::vector<std::string> bin_files) {
+int BlitzEngine::ssd_to_mem(std::vector<std::string> bin_files) {
   for (auto bin_file : bin_files) {
     auto meta_file = bin_file;
     size_t pos = meta_file.rfind('.');
@@ -114,7 +141,7 @@ void BlitzEngine::ssd_to_mem(std::vector<std::string> bin_files) {
     }
   }
   spdlog::info("Load done");
-  spdlog::default_logger()->flush();
+  return bin_files.size();
 }
 
 BlitzEngine::~BlitzEngine() {

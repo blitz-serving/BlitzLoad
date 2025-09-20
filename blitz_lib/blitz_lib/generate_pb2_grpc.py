@@ -44,6 +44,16 @@ class ParamServiceStub(object):
                 request_serializer=generate__pb2.LoadWeightRequest.SerializeToString,
                 response_deserializer=generate__pb2.LoadWeightResponse.FromString,
                 _registered_method=True)
+        self.GetHandler = channel.unary_unary(
+                '/generate.v2.ParamService/GetHandler',
+                request_serializer=generate__pb2.GetHandlerRequest.SerializeToString,
+                response_deserializer=generate__pb2.GetHandlerResponse.FromString,
+                _registered_method=True)
+        self.RevertHandler = channel.unary_unary(
+                '/generate.v2.ParamService/RevertHandler',
+                request_serializer=generate__pb2.RevertHandlerRequest.SerializeToString,
+                response_deserializer=generate__pb2.RevertHandlerResponse.FromString,
+                _registered_method=True)
 
 
 class ParamServiceServicer(object):
@@ -63,6 +73,20 @@ class ParamServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetHandler(self, request, context):
+        """Request to get c++ memory handler
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RevertHandler(self, request, context):
+        """Request to inform engine that handler can be destroyed
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ParamServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -75,6 +99,16 @@ def add_ParamServiceServicer_to_server(servicer, server):
                     servicer.LoadWeight,
                     request_deserializer=generate__pb2.LoadWeightRequest.FromString,
                     response_serializer=generate__pb2.LoadWeightResponse.SerializeToString,
+            ),
+            'GetHandler': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetHandler,
+                    request_deserializer=generate__pb2.GetHandlerRequest.FromString,
+                    response_serializer=generate__pb2.GetHandlerResponse.SerializeToString,
+            ),
+            'RevertHandler': grpc.unary_unary_rpc_method_handler(
+                    servicer.RevertHandler,
+                    request_deserializer=generate__pb2.RevertHandlerRequest.FromString,
+                    response_serializer=generate__pb2.RevertHandlerResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -131,6 +165,60 @@ class ParamService(object):
             '/generate.v2.ParamService/LoadWeight',
             generate__pb2.LoadWeightRequest.SerializeToString,
             generate__pb2.LoadWeightResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetHandler(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/generate.v2.ParamService/GetHandler',
+            generate__pb2.GetHandlerRequest.SerializeToString,
+            generate__pb2.GetHandlerResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RevertHandler(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/generate.v2.ParamService/RevertHandler',
+            generate__pb2.RevertHandlerRequest.SerializeToString,
+            generate__pb2.RevertHandlerResponse.FromString,
             options,
             channel_credentials,
             insecure,
