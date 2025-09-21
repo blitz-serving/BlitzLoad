@@ -28,13 +28,14 @@ for var in proxy_vars:
 
 
 CUDA_IPC_HANDLE_SIZE = 64
-libcuda = ctypes.CDLL("libcuda.so")
 
 try:
     import cupy.cuda.runtime as rt
+
     HAS_CUPY = True
 except ImportError:
     HAS_CUPY = False
+
 
 class CudaMemManager:
     def __init__(self):
@@ -56,16 +57,17 @@ class CudaMemManager:
         except Exception as e:
             raise RuntimeError(f"Failed to open IPC memory: {e}")
 
-    def copy_device_to_tensor(self, device_ptr: int, tensor: torch.Tensor, size: int, offset: int = 0):
+    def copy_device_to_tensor(
+        self, device_ptr: int, tensor: torch.Tensor, size: int, tensor_offset: int = 0,
+    ):
         if not tensor.is_cuda:
             raise ValueError("Target tensor must be on CUDA device")
 
         if not tensor.is_contiguous():
-            tensor = tensor.contiguous()
-        tensor_ptr = tensor.data_ptr() + offset
-        # print(
-        #     f"device_ptr={device_ptr}, tensor_ptr={tensor_ptr}, size={size}"
-        # )
+            raise MemoryError("Tensor should be contiguous")
+            # tensor = tensor.contiguous()
+        tensor_ptr = tensor.data_ptr() + tensor_offset
+        print(f"device_ptr={device_ptr}, tensor_ptr={tensor_ptr}, size={size}")
 
         rt.memcpy(tensor_ptr, device_ptr, size, rt.memcpyDeviceToDevice)
 
@@ -94,18 +96,29 @@ def _get_stub(server_addr: str):
     _stub = generate_pb2_grpc.ParamServiceStub(_channel)
     return _stub
 
-def load_weight_from_ipc_handle(param: torch.Tensor, weight_name: str, server_addr: str = "localhost:60060") -> None:
+
+def load_weight_from_ipc_handle(
+    param: torch.Tensor, weight_name: str, server_addr: str = "localhost:60060"
+) -> None:
+    print(f"Tensor name: {weight_name}")
     stub = _get_stub(server_addr)
-    tensor_size =  param.element_size() * param.nelement()
-    req = generate_pb2.GetHandlerRequest(tensor_name=weight_name, tensor_size=tensor_size)
+    tensor_size = param.element_size() * param.nelement()
+    req = generate_pb2.GetHandlerRequest(
+        tensor_name=weight_name, tensor_size=tensor_size
+    )
     res = stub.GetHandler(req)
     handle_bytes = res.ipc_handler
     loaded_bytes = res.loaded_size
+    device_offset = res.offset
     if len(handle_bytes) != CUDA_IPC_HANDLE_SIZE:
-        raise ValueError(f"Invalid IPC handle size: expected {CUDA_IPC_HANDLE_SIZE}, got {len(handle_bytes)}")
-    device_ptr = cuda_mem_manager.cuda_ipc_handle_to_ptr(handle_bytes)
-    cuda_mem_manager.copy_device_to_tensor(device_ptr, param,loaded_bytes)
-    req = generate_pb2.RevertHandlerRequest(tensor_name=weight_name, tensor_size=loaded_bytes)
+        raise ValueError(
+            f"Invalid IPC handle size: expected {CUDA_IPC_HANDLE_SIZE}, got {len(handle_bytes)}"
+        )
+    device_ptr = cuda_mem_manager.cuda_ipc_handle_to_ptr(handle_bytes) + device_offset
+    cuda_mem_manager.copy_device_to_tensor(device_ptr, param, loaded_bytes)
+    req = generate_pb2.RevertHandlerRequest(
+        tensor_name=weight_name, tensor_size=loaded_bytes
+    )
     stub.RevertHandler(req)
 
     if loaded_bytes < tensor_size:
@@ -119,53 +132,28 @@ def load_weight_from_ipc_handle(param: torch.Tensor, weight_name: str, server_ad
             res = stub.GetHandler(req)
             handle_bytes = res.ipc_handler
             new_loaded_bytes = res.loaded_size
+            device_offset = res.offset
             if len(handle_bytes) != CUDA_IPC_HANDLE_SIZE:
-                raise ValueError(f"Invalid IPC handle size: expected {CUDA_IPC_HANDLE_SIZE}, got {len(handle_bytes)}")
-            device_ptr = cuda_mem_manager.cuda_ipc_handle_to_ptr(handle_bytes)
+                raise ValueError(
+                    f"Invalid IPC handle size: expected {CUDA_IPC_HANDLE_SIZE}, got {len(handle_bytes)}"
+                )
+            device_ptr = cuda_mem_manager.cuda_ipc_handle_to_ptr(handle_bytes) + device_offset
             # cuda_mem_manager.copy_device_to_tensor(
             #     device_ptr, param[int(loaded_bytes / param.element_size()):], new_loaded_bytes
             # )
             cuda_mem_manager.copy_device_to_tensor(
                 device_ptr, param, new_loaded_bytes, loaded_bytes
             )
-            
+
             loaded_bytes += new_loaded_bytes
             print(f"Current size: {loaded_bytes}")
             # inform engine that handler can be destroyed
-            req = generate_pb2.RevertHandlerRequest(tensor_name=weight_name, tensor_size=new_loaded_bytes)
+            req = generate_pb2.RevertHandlerRequest(
+                tensor_name=weight_name, tensor_size=new_loaded_bytes
+            )
             stub.RevertHandler(req)
-    else :
+    else:
         print(f"tensor {weight_name} load done")
-
-
-def _send_grpc_call_to_server(
-    param: torch.Tensor, weight_name: str, server_addr: str = "localhost:60060"
-) -> None:
-    if not param.is_cuda:
-        raise ValueError("param must on cuda device")
-
-    tensor_size = param.nelement()
-    dtype_size = param.element_size()
-    device = param.device.index
-    nbytes = tensor_size * dtype_size
-    ptr = param.data_ptr()
-
-    handle = cudaIpcMemHandle()
-    res = libcuda.cuIpcGetMemHandle(ctypes.byref(handle), ctypes.c_void_p(ptr))
-    if res != 0:
-        raise RuntimeError(f"cuIpcGetMemHandle failed: {res}")
-
-    handle_bytes = ctypes.string_at(ctypes.byref(handle), CUDA_IPC_HANDLE_SIZE)
-
-    req = generate_pb2.LoadWeightRequest(
-        ipc_handle=handle_bytes,
-        tensor_size=nbytes,
-        tensor_device=device,
-        tensor_name=weight_name,
-    )
-
-    stub = _get_stub(server_addr)
-    return stub.LoadWeight(req)
 
 
 def pull_model(model_name: str, server_addr: str = "localhost:60060"):
@@ -174,7 +162,7 @@ def pull_model(model_name: str, server_addr: str = "localhost:60060"):
     return stub.PullModel(req)
 
 
-def _dump_tensor(tensor, tensor_name):
+def _dump_tensor(tensor, tensor_name, out_dir):
     # if "norm" in tensor_name:
     #     print(f"{tensor_name}: {tensor.shape}, {tensor.dtype}, {tensor.device}, first value: {tensor.view(torch.float32)[0]}")
     # return
@@ -191,7 +179,7 @@ def _dump_tensor(tensor, tensor_name):
         uint8_tensor = tensor.clone().view(torch.uint8)
     np_array = uint8_tensor.numpy()
     bytes_data = np_array.tobytes()
-    with open(f"/tmp/blitz_new/{tensor_name}.bin", "wb") as f:
+    with open(f"/tmp/{out_dir}/{tensor_name}.bin", "wb") as f:
         f.write(bytes_data)
         f.close()
 
@@ -207,8 +195,8 @@ def vllm_hook(func):
         param_names = list(sig.parameters.keys())
         name = param_names[1]
         val = bound.arguments[name]
-        load_weight_from_ipc_handle(val, "")
-        _dump_tensor(val, bound.arguments[param_names[0]].prefix)
+        load_weight_from_ipc_handle(val, bound.arguments[param_names[0]].prefix)
+        # _dump_tensor(val, bound.arguments[param_names[0]].prefix)
 
     return wrapper
 
@@ -225,7 +213,6 @@ def vllm_dumper(func):
         param_names = list(sig.parameters.keys())
         name = param_names[1]
         val = bound.arguments[name]
-        # _dump_tensor(val, bound.arguments[param_names[0]].prefix)
         return result
 
     return wrapper

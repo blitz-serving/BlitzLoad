@@ -9,6 +9,7 @@
 #include <memory>
 #include <regex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "generate.grpc.pb.h"
@@ -92,11 +93,13 @@ public:
                     GetHandlerResponse *resp) override {
     (void)ctx;
     cudaIpcMemHandle_t handle;
+    size_t offset = 0;
     // FIXME: hard code shard_id = 0
     auto loaded_size =
-        engine_ptr->export_handler(&handle, req->tensor_size(), 0);
+        engine_ptr->export_handler(&handle, &offset, req->tensor_size(), 0);
     resp->set_ipc_handler(reinterpret_cast<const char *>(&handle),
                           sizeof(handle));
+    resp->set_offset(offset);
     resp->set_loaded_size(loaded_size);
     return Status::OK;
   }

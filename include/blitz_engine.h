@@ -23,8 +23,8 @@ public:
   void mem_to_buffer(int shard_num);
   void buffer_to_tensor(cudaIpcMemHandle_t &handle, int tensor_device,
                         size_t tensor_size, int shard_id); // deprecated
-  size_t export_handler(cudaIpcMemHandle_t *handle, size_t tensor_size,
-                        int shard_id);
+  size_t export_handler(cudaIpcMemHandle_t *handle, size_t *offset,
+                        size_t tensor_size, int shard_id);
   void free_handler(size_t tensor_size, int shard_id);
 
 private:

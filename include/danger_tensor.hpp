@@ -145,9 +145,18 @@ public:
     while (it != metas_vec.end() &&
            loaded_size + it->data_length - first_tensor_offset <= buffer_size) {
       auto ls = it->data_length - first_tensor_offset;
+      __nv_bfloat16 *val =
+          (__nv_bfloat16 *)(host_weight_segment + start_offset + loaded_size);
       loaded_size += ls;
       first_tensor_offset = 0;
-      spdlog::info("Loading {}", it->name);
+      // fprintf(stderr,
+      //         "segment 0x%lx offset 0x%lx ls 0x%lu loaded size 0x%lx %lu pos
+      //         " "0x%lx\n", (uint64_t)host_weight_segment, start_offset, ls,
+      //         (uint64_t)loaded_size, (uint64_t)loaded_size,
+      //         (uint64_t)(host_weight_segment + start_offset + loaded_size));
+      spdlog::info("Loading {}, values: [{}, {}, {}]", it->name,
+                   __bfloat162float(*val), __bfloat162float(*(val + 1)),
+                   __bfloat162float(*(val + 2)));
       it++;
     }
     if (it != metas_vec.end() && loaded_size == 0 &&

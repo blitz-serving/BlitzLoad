@@ -82,9 +82,9 @@ void BlitzEngine::buffer_to_tensor(cudaIpcMemHandle_t &handle,
   }
 }
 
-size_t BlitzEngine::export_handler(cudaIpcMemHandle_t *handle,
+size_t BlitzEngine::export_handler(cudaIpcMemHandle_t *handle, size_t *offset,
                                    size_t tensor_size, int shard_id) {
-  return buf_groups[shard_id]->export_handler(handle, tensor_size);
+  return buf_groups[shard_id]->export_handler(handle, offset, tensor_size);
 }
 
 void BlitzEngine::free_handler(size_t tensor_size, int shard_id) {
