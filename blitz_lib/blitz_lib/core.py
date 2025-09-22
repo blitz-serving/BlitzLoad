@@ -8,6 +8,10 @@ from . import generate_pb2
 from . import generate_pb2_grpc
 
 import os
+from threading import Lock
+
+_grpc_clients: dict[str, dict] = {}
+_grpc_clients_lock = Lock()
 
 # 需要清除的代理环境变量列表
 proxy_vars = [
@@ -28,6 +32,7 @@ for var in proxy_vars:
 
 
 CUDA_IPC_HANDLE_SIZE = 64
+TASK_ID = ""
 
 try:
     import cupy.cuda.runtime as rt
@@ -58,7 +63,11 @@ class CudaMemManager:
             raise RuntimeError(f"Failed to open IPC memory: {e}")
 
     def copy_device_to_tensor(
-        self, device_ptr: int, tensor: torch.Tensor, size: int, tensor_offset: int = 0,
+        self,
+        device_ptr: int,
+        tensor: torch.Tensor,
+        size: int,
+        tensor_offset: int = 0,
     ):
         if not tensor.is_cuda:
             raise ValueError("Target tensor must be on CUDA device")
@@ -76,37 +85,68 @@ class cudaIpcMemHandle(ctypes.Structure):
     _fields_ = [("reserved", ctypes.c_char * CUDA_IPC_HANDLE_SIZE)]
 
 
-_channel = None
-_stub = None
+# _channel = None
+# _stub = None
+# _grpc_metas = {}
 cuda_mem_manager = CudaMemManager()
 
 
-def _get_stub(server_addr: str):
-    global _channel, _stub
-    if _stub is not None:
-        return _stub
+def _get_stub(server_addr: str, refresh_stub: bool = False):
+    """
+    获取指定 server_addr 的 stub，多进程安全：
+    - 每个进程独立维护自己的 stub/channel
+    - fork 后子进程会重新创建自己的 stub
+    """
+    global _grpc_clients
 
-    _channel = grpc.insecure_channel(server_addr)
-    try:
-        grpc.channel_ready_future(_channel).result(timeout=5)
-        print(f"[blitz_param_engine_cli] Connected to {server_addr}")
-    except grpc.FutureTimeoutError:
-        raise RuntimeError(f"Cannot connect to {server_addr}")
+    current_pid = os.getpid()
 
-    _stub = generate_pb2_grpc.ParamServiceStub(_channel)
-    return _stub
+    with _grpc_clients_lock:
+        if server_addr not in _grpc_clients:
+            # 初始化字典条目
+            _grpc_clients[server_addr] = {"pid": None, "channel": None, "stub": None}
+
+        client_info = _grpc_clients[server_addr]
+
+        # 如果进程 PID 发生变化（fork 后）或者要求刷新 stub
+        if (
+            client_info["pid"] != current_pid
+            or refresh_stub
+            or client_info["stub"] is None
+        ):
+            print(f"[PID {current_pid}] Creating new stub for {server_addr}")
+            if client_info["channel"] is not None:
+                client_info["channel"].close()  # close old channel
+            channel = grpc.insecure_channel(server_addr)
+            try:
+                grpc.channel_ready_future(channel).result(timeout=5)
+                print(f"[PID {current_pid}] Connected to {server_addr}")
+            except grpc.FutureTimeoutError:
+                raise RuntimeError(f"Cannot connect to {server_addr}")
+            stub = generate_pb2_grpc.ParamServiceStub(channel)
+
+            client_info["pid"] = current_pid
+            client_info["channel"] = channel
+            client_info["stub"] = stub
+
+    return client_info["stub"]
 
 
 def load_weight_from_ipc_handle(
     param: torch.Tensor, weight_name: str, server_addr: str = "localhost:60060"
 ) -> None:
-    print(f"Tensor name: {weight_name}")
+    # print(f"Tensor name: {weight_name}", flush=True)
     stub = _get_stub(server_addr)
     tensor_size = param.element_size() * param.nelement()
     req = generate_pb2.GetHandlerRequest(
         tensor_name=weight_name, tensor_size=tensor_size
     )
-    res = stub.GetHandler(req)
+    try:
+        res = stub.GetHandler(req, timeout=5.0)
+    except grpc.RpcError as e:
+        print("GetHandler RPC failed:", e.code(), e.details(), flush=True)
+        return
+
     handle_bytes = res.ipc_handler
     loaded_bytes = res.loaded_size
     device_offset = res.offset
@@ -122,8 +162,6 @@ def load_weight_from_ipc_handle(
     stub.RevertHandler(req)
 
     if loaded_bytes < tensor_size:
-        # tensor too large
-        print(f"tensor {weight_name} too large")
         while loaded_bytes < tensor_size:
             print(f"continue loading {weight_name}")
             req = generate_pb2.GetHandlerRequest(
@@ -137,7 +175,9 @@ def load_weight_from_ipc_handle(
                 raise ValueError(
                     f"Invalid IPC handle size: expected {CUDA_IPC_HANDLE_SIZE}, got {len(handle_bytes)}"
                 )
-            device_ptr = cuda_mem_manager.cuda_ipc_handle_to_ptr(handle_bytes) + device_offset
+            device_ptr = (
+                cuda_mem_manager.cuda_ipc_handle_to_ptr(handle_bytes) + device_offset
+            )
             # cuda_mem_manager.copy_device_to_tensor(
             #     device_ptr, param[int(loaded_bytes / param.element_size()):], new_loaded_bytes
             # )
@@ -157,17 +197,22 @@ def load_weight_from_ipc_handle(
 
 
 def pull_model(model_name: str, server_addr: str = "localhost:60060"):
+    global TASK_ID
     stub = _get_stub(server_addr)
     req = generate_pb2.PullModelRequest(model_name=model_name)
-    return stub.PullModel(req)
+    res = stub.PullModel(req)
+    TASK_ID = res.task_id
+    return TASK_ID
+
+
+def check_model(server_addr="localhost:60060") -> bool:
+    stub = _get_stub(server_addr)
+    req = generate_pb2.CheckModelRequest(task_id=TASK_ID)
+    res = stub.CheckModel(req)
+    return res.done
 
 
 def _dump_tensor(tensor, tensor_name, out_dir):
-    # if "norm" in tensor_name:
-    #     print(f"{tensor_name}: {tensor.shape}, {tensor.dtype}, {tensor.device}, first value: {tensor.view(torch.float32)[0]}")
-    # return
-    # if "norm" not in tensor_name:
-    #     return
     tensor = tensor.cpu()
     try:
         if not tensor.is_contiguous():
@@ -195,24 +240,8 @@ def vllm_hook(func):
         param_names = list(sig.parameters.keys())
         name = param_names[1]
         val = bound.arguments[name]
+
         load_weight_from_ipc_handle(val, bound.arguments[param_names[0]].prefix)
         # _dump_tensor(val, bound.arguments[param_names[0]].prefix)
-
-    return wrapper
-
-
-def vllm_dumper(func):
-    sig = inspect.signature(func)
-
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        result = func(*args, **kwargs)
-        bound = sig.bind(*args, **kwargs)
-        bound.apply_defaults()
-
-        param_names = list(sig.parameters.keys())
-        name = param_names[1]
-        val = bound.arguments[name]
-        return result
 
     return wrapper

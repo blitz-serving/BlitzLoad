@@ -92,9 +92,9 @@ public:
       load_tensor_size = buffer_size;
     }
     LOG_ASSERT(local_usable_size >= planned_used_size + load_tensor_size,
-               "usable size {} < used + tensor size {}",
-               local_usable_size.load(),
-               load_tensor_size + planned_used_size.load());
+               "usable size 0x{:x} < used 0x{:x} + tensor size 0x{:x}",
+               local_usable_size.load(), planned_used_size.load(),
+               load_tensor_size);
     __nv_bfloat16 *val =
         (__nv_bfloat16 *)((char *)buffer_ptr + planned_used_size);
     std::vector<__nv_bfloat16> vals(3);

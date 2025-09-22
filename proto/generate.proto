@@ -6,6 +6,8 @@ package generate.v2;
 service ParamService {
     // Request to load model from repo
     rpc PullModel(PullModelRequest) returns (PullModelResponse) {}
+    // Request to check model loading status
+    rpc CheckModel(CheckModelRequest) returns (CheckModelResponse) {}
     // Request to load weights to torch.Tensor, engine returns a shm/gpu ptr, clients to move data
     rpc LoadWeight(LoadWeightRequest) returns (LoadWeightResponse) {}
     // Request to get c++ memory handler
@@ -36,7 +38,17 @@ message PullModelRequest {
     // model name or path
     required string model_name = 1;
 }
-message PullModelResponse {}
+message PullModelResponse {
+    required string task_id = 1;
+}
+
+message CheckModelRequest {
+    required string task_id = 1;
+}
+
+message CheckModelResponse {
+    required bool done = 1;
+}
 
 message LoadWeightRequest{
     required bytes ipc_handle = 1;

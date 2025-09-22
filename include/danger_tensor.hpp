@@ -121,10 +121,9 @@ public:
     auto stop = std::chrono::high_resolution_clock::now();
     auto duration =
         std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
-    // spdlog::info("Load model weight to host takes {} ms, effective bw {}
-    // GBps",
-    //              duration, (double)file_size / duration.count() / 1000 /
-    //              1000);
+    spdlog::info("Load model weight to host takes {} ms, effective bw {} GBps ",
+                 duration.count(),
+                 (double)file_size / duration.count() / 1000 / 1000);
 
     valid.store(true, std::memory_order_release);
     close(fd);
@@ -149,11 +148,6 @@ public:
           (__nv_bfloat16 *)(host_weight_segment + start_offset + loaded_size);
       loaded_size += ls;
       first_tensor_offset = 0;
-      // fprintf(stderr,
-      //         "segment 0x%lx offset 0x%lx ls 0x%lu loaded size 0x%lx %lu pos
-      //         " "0x%lx\n", (uint64_t)host_weight_segment, start_offset, ls,
-      //         (uint64_t)loaded_size, (uint64_t)loaded_size,
-      //         (uint64_t)(host_weight_segment + start_offset + loaded_size));
       spdlog::info("Loading {}, values: [{}, {}, {}]", it->name,
                    __bfloat162float(*val), __bfloat162float(*(val + 1)),
                    __bfloat162float(*(val + 2)));

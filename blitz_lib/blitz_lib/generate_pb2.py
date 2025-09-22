@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0egenerate.proto\x12\x0bgenerate.v2\"=\n\x11GetHandlerRequest\x12\x13\n\x0btensor_name\x18\x01 \x02(\t\x12\x13\n\x0btensor_size\x18\x02 \x02(\x04\"N\n\x12GetHandlerResponse\x12\x13\n\x0bipc_handler\x18\x01 \x02(\x0c\x12\x0e\n\x06offset\x18\x02 \x02(\x04\x12\x13\n\x0bloaded_size\x18\x03 \x01(\x04\"@\n\x14RevertHandlerRequest\x12\x13\n\x0btensor_name\x18\x01 \x02(\t\x12\x13\n\x0btensor_size\x18\x02 \x02(\x04\"\x17\n\x15RevertHandlerResponse\"&\n\x10PullModelRequest\x12\x12\n\nmodel_name\x18\x01 \x02(\t\"\x13\n\x11PullModelResponse\"h\n\x11LoadWeightRequest\x12\x12\n\nipc_handle\x18\x01 \x02(\x0c\x12\x13\n\x0btensor_size\x18\x02 \x02(\x04\x12\x15\n\rtensor_device\x18\x03 \x02(\r\x12\x13\n\x0btensor_name\x18\x04 \x02(\t\"\x14\n\x12LoadWeightResponse2\xd8\x02\n\x0cParamService\x12L\n\tPullModel\x12\x1d.generate.v2.PullModelRequest\x1a\x1e.generate.v2.PullModelResponse\"\x00\x12O\n\nLoadWeight\x12\x1e.generate.v2.LoadWeightRequest\x1a\x1f.generate.v2.LoadWeightResponse\"\x00\x12O\n\nGetHandler\x12\x1e.generate.v2.GetHandlerRequest\x1a\x1f.generate.v2.GetHandlerResponse\"\x00\x12X\n\rRevertHandler\x12!.generate.v2.RevertHandlerRequest\x1a\".generate.v2.RevertHandlerResponse\"\x00')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0egenerate.proto\x12\x0bgenerate.v2\"=\n\x11GetHandlerRequest\x12\x13\n\x0btensor_name\x18\x01 \x02(\t\x12\x13\n\x0btensor_size\x18\x02 \x02(\x04\"N\n\x12GetHandlerResponse\x12\x13\n\x0bipc_handler\x18\x01 \x02(\x0c\x12\x0e\n\x06offset\x18\x02 \x02(\x04\x12\x13\n\x0bloaded_size\x18\x03 \x01(\x04\"@\n\x14RevertHandlerRequest\x12\x13\n\x0btensor_name\x18\x01 \x02(\t\x12\x13\n\x0btensor_size\x18\x02 \x02(\x04\"\x17\n\x15RevertHandlerResponse\"&\n\x10PullModelRequest\x12\x12\n\nmodel_name\x18\x01 \x02(\t\"$\n\x11PullModelResponse\x12\x0f\n\x07task_id\x18\x01 \x02(\t\"$\n\x11\x43heckModelRequest\x12\x0f\n\x07task_id\x18\x01 \x02(\t\"\"\n\x12\x43heckModelResponse\x12\x0c\n\x04\x64one\x18\x01 \x02(\x08\"h\n\x11LoadWeightRequest\x12\x12\n\nipc_handle\x18\x01 \x02(\x0c\x12\x13\n\x0btensor_size\x18\x02 \x02(\x04\x12\x15\n\rtensor_device\x18\x03 \x02(\r\x12\x13\n\x0btensor_name\x18\x04 \x02(\t\"\x14\n\x12LoadWeightResponse2\xa9\x03\n\x0cParamService\x12L\n\tPullModel\x12\x1d.generate.v2.PullModelRequest\x1a\x1e.generate.v2.PullModelResponse\"\x00\x12O\n\nCheckModel\x12\x1e.generate.v2.CheckModelRequest\x1a\x1f.generate.v2.CheckModelResponse\"\x00\x12O\n\nLoadWeight\x12\x1e.generate.v2.LoadWeightRequest\x1a\x1f.generate.v2.LoadWeightResponse\"\x00\x12O\n\nGetHandler\x12\x1e.generate.v2.GetHandlerRequest\x1a\x1f.generate.v2.GetHandlerResponse\"\x00\x12X\n\rRevertHandler\x12!.generate.v2.RevertHandlerRequest\x1a\".generate.v2.RevertHandlerResponse\"\x00')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -42,11 +42,15 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_PULLMODELREQUEST']._serialized_start=265
   _globals['_PULLMODELREQUEST']._serialized_end=303
   _globals['_PULLMODELRESPONSE']._serialized_start=305
-  _globals['_PULLMODELRESPONSE']._serialized_end=324
-  _globals['_LOADWEIGHTREQUEST']._serialized_start=326
-  _globals['_LOADWEIGHTREQUEST']._serialized_end=430
-  _globals['_LOADWEIGHTRESPONSE']._serialized_start=432
-  _globals['_LOADWEIGHTRESPONSE']._serialized_end=452
-  _globals['_PARAMSERVICE']._serialized_start=455
-  _globals['_PARAMSERVICE']._serialized_end=799
+  _globals['_PULLMODELRESPONSE']._serialized_end=341
+  _globals['_CHECKMODELREQUEST']._serialized_start=343
+  _globals['_CHECKMODELREQUEST']._serialized_end=379
+  _globals['_CHECKMODELRESPONSE']._serialized_start=381
+  _globals['_CHECKMODELRESPONSE']._serialized_end=415
+  _globals['_LOADWEIGHTREQUEST']._serialized_start=417
+  _globals['_LOADWEIGHTREQUEST']._serialized_end=521
+  _globals['_LOADWEIGHTRESPONSE']._serialized_start=523
+  _globals['_LOADWEIGHTRESPONSE']._serialized_end=543
+  _globals['_PARAMSERVICE']._serialized_start=546
+  _globals['_PARAMSERVICE']._serialized_end=971
 # @@protoc_insertion_point(module_scope)

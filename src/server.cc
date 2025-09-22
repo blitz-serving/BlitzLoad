@@ -1,13 +1,18 @@
 #include <blitz_engine.h>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <grpcpp/grpcpp.h>
 #include <grpcpp/server_context.h>
 #include <grpcpp/support/status.h>
+#include <iomanip>
 #include <iostream>
+#include <map>
 #include <memory>
+#include <openssl/sha.h>
 #include <regex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -68,12 +73,30 @@ public:
     } catch (const std::exception &e) {
       spdlog::error("Error: {}", e.what());
     }
-    auto shard_num = engine_ptr->ssd_to_mem(bin_files);
-    engine_ptr->mem_to_buffer(shard_num);
+    std::string data = req->model_name() + std::to_string(time(nullptr));
+    auto id = sha256(data);
+    task_map[id] = false;
+    std::thread([this, bin_files, id] {
+      engine_ptr->ssd_to_mem(bin_files);
+      engine_ptr->mem_to_buffer(bin_files.size());
+      task_map[id] = true;
+    }).detach();
+    resp->set_task_id(id);
+    spdlog::info("Task ID is {}", id);
 
     return Status::OK;
   }
 
+  Status CheckModel(ServerContext *ctx, const CheckModelRequest *req,
+                    CheckModelResponse *resp) override {
+    auto res = task_map[req->task_id()];
+    resp->set_done(res);
+    spdlog::info("Model loaded? {}, task_id {}", res, req->task_id());
+
+    return Status::OK;
+  }
+
+  /// deprecated
   Status LoadWeight(ServerContext *ctx, const LoadWeightRequest *req,
                     LoadWeightResponse *resp) override {
     (void)ctx;
@@ -111,8 +134,19 @@ public:
     return Status::OK;
   }
 
+  std::string sha256(const std::string &str) {
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256((unsigned char *)str.c_str(), str.size(), hash);
+
+    std::ostringstream oss;
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; ++i)
+      oss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
+    return oss.str();
+  }
+
 private:
   std::unique_ptr<blitz::BlitzEngine> engine_ptr;
+  std::map<std::string, bool> task_map;
 };
 
 } // namespace v2

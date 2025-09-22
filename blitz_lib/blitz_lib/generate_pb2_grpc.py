@@ -39,6 +39,11 @@ class ParamServiceStub(object):
                 request_serializer=generate__pb2.PullModelRequest.SerializeToString,
                 response_deserializer=generate__pb2.PullModelResponse.FromString,
                 _registered_method=True)
+        self.CheckModel = channel.unary_unary(
+                '/generate.v2.ParamService/CheckModel',
+                request_serializer=generate__pb2.CheckModelRequest.SerializeToString,
+                response_deserializer=generate__pb2.CheckModelResponse.FromString,
+                _registered_method=True)
         self.LoadWeight = channel.unary_unary(
                 '/generate.v2.ParamService/LoadWeight',
                 request_serializer=generate__pb2.LoadWeightRequest.SerializeToString,
@@ -61,6 +66,13 @@ class ParamServiceServicer(object):
 
     def PullModel(self, request, context):
         """Request to load model from repo
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CheckModel(self, request, context):
+        """Request to check model loading status
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -94,6 +106,11 @@ def add_ParamServiceServicer_to_server(servicer, server):
                     servicer.PullModel,
                     request_deserializer=generate__pb2.PullModelRequest.FromString,
                     response_serializer=generate__pb2.PullModelResponse.SerializeToString,
+            ),
+            'CheckModel': grpc.unary_unary_rpc_method_handler(
+                    servicer.CheckModel,
+                    request_deserializer=generate__pb2.CheckModelRequest.FromString,
+                    response_serializer=generate__pb2.CheckModelResponse.SerializeToString,
             ),
             'LoadWeight': grpc.unary_unary_rpc_method_handler(
                     servicer.LoadWeight,
@@ -138,6 +155,33 @@ class ParamService(object):
             '/generate.v2.ParamService/PullModel',
             generate__pb2.PullModelRequest.SerializeToString,
             generate__pb2.PullModelResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CheckModel(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/generate.v2.ParamService/CheckModel',
+            generate__pb2.CheckModelRequest.SerializeToString,
+            generate__pb2.CheckModelResponse.FromString,
             options,
             channel_credentials,
             insecure,
