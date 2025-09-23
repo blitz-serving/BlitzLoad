@@ -98,12 +98,12 @@ public:
               ssize_t bytes_read = pread(fd, buf_ptr, nbytes, offset);
 
               if (bytes_read < 0) {
-                spdlog::error("Read chunk [{:#x},{:#x}] w/ errno: {} {}",
+                spdlog::error("Read chunk [0x{:x},0x{:x}] w/ errno: {} {}",
                               offset, offset + nbytes, errno, strerror(errno));
                 return -1;
               } else if ((size_t)bytes_read != nbytes) {
                 spdlog::error(
-                    "Read chunk [{:#x},{:#x}] for {} bytes, but read {} bytes",
+                    "Read chunk [{:x},{:x}] for {} bytes, but read {} bytes",
                     offset, offset + nbytes, bytes_read);
                 return -2;
               }

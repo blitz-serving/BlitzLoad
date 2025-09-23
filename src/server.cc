@@ -1,4 +1,5 @@
 #include <blitz_engine.h>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -100,6 +101,7 @@ public:
   Status LoadWeight(ServerContext *ctx, const LoadWeightRequest *req,
                     LoadWeightResponse *resp) override {
     (void)ctx;
+
     cudaIpcMemHandle_t handle;
     const std::string &serialized_handle = req->ipc_handle();
     memcpy(&handle, serialized_handle.data(), sizeof(handle));
@@ -115,6 +117,7 @@ public:
   Status GetHandler(ServerContext *ctx, const GetHandlerRequest *req,
                     GetHandlerResponse *resp) override {
     (void)ctx;
+    auto start = std::chrono::steady_clock::now();
     cudaIpcMemHandle_t handle;
     size_t offset = 0;
     // FIXME: hard code shard_id = 0
@@ -124,13 +127,28 @@ public:
                           sizeof(handle));
     resp->set_offset(offset);
     resp->set_loaded_size(loaded_size);
+    auto end = std::chrono::steady_clock::now();
+    auto elapse_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+            .count();
+    elaspse_all += elapse_ms;
+
+    spdlog::info("cum time: {}ms", elaspse_all);
     return Status::OK;
   }
 
   // FIXME: hard code shard_id = 0
   Status RevertHandler(ServerContext *ctx, const RevertHandlerRequest *req,
                        RevertHandlerResponse *resp) override {
+    auto start = std::chrono::steady_clock::now();
     engine_ptr->free_handler(req->tensor_size(), 0);
+    auto end = std::chrono::steady_clock::now();
+    auto elapse_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+            .count();
+    elaspse_all2 += elapse_ms;
+
+    spdlog::info("cum time: {}ms", elaspse_all2);
     return Status::OK;
   }
 
@@ -147,6 +165,8 @@ public:
 private:
   std::unique_ptr<blitz::BlitzEngine> engine_ptr;
   std::map<std::string, bool> task_map;
+  size_t elaspse_all = 0;
+  size_t elaspse_all2 = 0;
 };
 
 } // namespace v2

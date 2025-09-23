@@ -1,6 +1,8 @@
 import grpc
 import torch
 import ctypes
+import time
+import cProfile, pstats, io
 
 import functools
 import inspect
@@ -12,6 +14,7 @@ from threading import Lock
 
 _grpc_clients: dict[str, dict] = {}
 _grpc_clients_lock = Lock()
+profiler = cProfile.Profile()
 
 # 需要清除的代理环境变量列表
 proxy_vars = [
@@ -33,6 +36,7 @@ for var in proxy_vars:
 
 CUDA_IPC_HANDLE_SIZE = 64
 TASK_ID = ""
+LIB_TIME=0
 
 try:
     import cupy.cuda.runtime as rt
@@ -74,9 +78,7 @@ class CudaMemManager:
 
         if not tensor.is_contiguous():
             raise MemoryError("Tensor should be contiguous")
-            # tensor = tensor.contiguous()
         tensor_ptr = tensor.data_ptr() + tensor_offset
-        print(f"device_ptr={device_ptr}, tensor_ptr={tensor_ptr}, size={size}")
 
         rt.memcpy(tensor_ptr, device_ptr, size, rt.memcpyDeviceToDevice)
 
@@ -131,18 +133,21 @@ def _get_stub(server_addr: str, refresh_stub: bool = False):
 
     return client_info["stub"]
 
-
 def load_weight_from_ipc_handle(
     param: torch.Tensor, weight_name: str, server_addr: str = "localhost:60060"
 ) -> None:
-    # print(f"Tensor name: {weight_name}", flush=True)
+    global LIB_TIME
+    # profiler.enable()
+    start = time.time()
     stub = _get_stub(server_addr)
     tensor_size = param.element_size() * param.nelement()
     req = generate_pb2.GetHandlerRequest(
         tensor_name=weight_name, tensor_size=tensor_size
     )
     try:
+        # start = time.time()
         res = stub.GetHandler(req, timeout=5.0)
+        # H2D_TIME += time.time()-start
     except grpc.RpcError as e:
         print("GetHandler RPC failed:", e.code(), e.details(), flush=True)
         return
@@ -163,11 +168,13 @@ def load_weight_from_ipc_handle(
 
     if loaded_bytes < tensor_size:
         while loaded_bytes < tensor_size:
-            print(f"continue loading {weight_name}")
+            # print(f"continue loading {weight_name}")
             req = generate_pb2.GetHandlerRequest(
                 tensor_name=weight_name, tensor_size=tensor_size - loaded_bytes
             )
+            # start = time.time()
             res = stub.GetHandler(req)
+            # H2D_TIME += time.time() - start
             handle_bytes = res.ipc_handler
             new_loaded_bytes = res.loaded_size
             device_offset = res.offset
@@ -186,19 +193,27 @@ def load_weight_from_ipc_handle(
             )
 
             loaded_bytes += new_loaded_bytes
-            print(f"Current size: {loaded_bytes}")
+            # print(f"Current size: {loaded_bytes}")
             # inform engine that handler can be destroyed
             req = generate_pb2.RevertHandlerRequest(
                 tensor_name=weight_name, tensor_size=new_loaded_bytes
             )
             stub.RevertHandler(req)
+            # print(f"Current H2D time: {H2D_TIME}s")
     else:
-        print(f"tensor {weight_name} load done")
+        pass
+        # print(f"Current H2D time: {H2D_TIME}s")
+        # print(f"tensor {weight_name} load done")
+    
+    LIB_TIME += time.time()-start
+    print(f"Current Lib time: {LIB_TIME}s")
+    # profiler.disable()
 
 
 def pull_model(model_name: str, server_addr: str = "localhost:60060"):
-    global TASK_ID
+    global TASK_ID, S2H_TIME
     stub = _get_stub(server_addr)
+    # S2H_TIME = time.time()
     req = generate_pb2.PullModelRequest(model_name=model_name)
     res = stub.PullModel(req)
     TASK_ID = res.task_id
@@ -206,11 +221,19 @@ def pull_model(model_name: str, server_addr: str = "localhost:60060"):
 
 
 def check_model(server_addr="localhost:60060") -> bool:
+    # global S2H_TIME
     stub = _get_stub(server_addr)
     req = generate_pb2.CheckModelRequest(task_id=TASK_ID)
     res = stub.CheckModel(req)
+    # if res.done:
+        # S2H_TIME = time.time() - S2H_TIME
+        # print(f"Load model time: {S2H_TIME}, bandwidth: {16 / S2H_TIME}GBps")
     return res.done
 
+def print_profile():
+    pass
+    # stats = pstats.Stats(profiler).sort_stats("cumtime")
+    # stats.print_stats()
 
 def _dump_tensor(tensor, tensor_name, out_dir):
     tensor = tensor.cpu()
@@ -228,7 +251,7 @@ def _dump_tensor(tensor, tensor_name, out_dir):
         f.write(bytes_data)
         f.close()
 
-
+# FIXME: gguf not applied
 def vllm_hook(func):
     sig = inspect.signature(func)
 
