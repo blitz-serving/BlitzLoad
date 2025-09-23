@@ -8,6 +8,7 @@ import functools
 import inspect
 from . import generate_pb2
 from . import generate_pb2_grpc
+from grpc_health.v1 import health_pb2, health_pb2_grpc
 
 import os
 from threading import Lock
@@ -36,7 +37,7 @@ for var in proxy_vars:
 
 CUDA_IPC_HANDLE_SIZE = 64
 TASK_ID = ""
-LIB_TIME=0
+LIB_TIME = 0
 
 try:
     import cupy.cuda.runtime as rt
@@ -44,6 +45,28 @@ try:
     HAS_CUPY = True
 except ImportError:
     HAS_CUPY = False
+
+
+def health_check(channel) -> bool:
+    stub = health_pb2_grpc.HealthStub(channel)
+    try:
+        response = stub.Check(health_pb2.HealthCheckRequest(service=""))
+        if response.status == health_pb2.HealthCheckResponse.SERVING:
+            return True
+        else:
+            return False
+    except Exception as e:
+        return False
+        # raise RuntimeError(f"Failed to run health check: {e}")
+
+
+def register_fork_handler(channel):
+    def _fork_post_child():
+        channel.close()
+        grpc._cygrpc.terminate()
+        print("Child process: gRPC resources destroyed")
+
+    os.register_at_fork(after_in_child=_fork_post_child)
 
 
 class CudaMemManager:
@@ -94,32 +117,33 @@ cuda_mem_manager = CudaMemManager()
 
 
 def _get_stub(server_addr: str, refresh_stub: bool = False):
-    """
-    获取指定 server_addr 的 stub，多进程安全：
-    - 每个进程独立维护自己的 stub/channel
-    - fork 后子进程会重新创建自己的 stub
-    """
     global _grpc_clients
 
     current_pid = os.getpid()
 
     with _grpc_clients_lock:
-        if server_addr not in _grpc_clients:
-            # 初始化字典条目
-            _grpc_clients[server_addr] = {"pid": None, "channel": None, "stub": None}
+        if current_pid not in _grpc_clients:
+            _grpc_clients[current_pid] = {
+                "checked": False,
+                "channel": None,
+                "stub": None,
+            }
 
-        client_info = _grpc_clients[server_addr]
+        client_info = _grpc_clients[current_pid]
 
-        # 如果进程 PID 发生变化（fork 后）或者要求刷新 stub
         if (
-            client_info["pid"] != current_pid
+            client_info["checked"] != True
             or refresh_stub
             or client_info["stub"] is None
         ):
             print(f"[PID {current_pid}] Creating new stub for {server_addr}")
-            if client_info["channel"] is not None:
-                client_info["channel"].close()  # close old channel
+
             channel = grpc.insecure_channel(server_addr)
+            if not health_check(channel):
+                register_fork_handler(channel)
+
+                channel = grpc.insecure_channel(server_addr)
+
             try:
                 grpc.channel_ready_future(channel).result(timeout=5)
                 print(f"[PID {current_pid}] Connected to {server_addr}")
@@ -127,11 +151,12 @@ def _get_stub(server_addr: str, refresh_stub: bool = False):
                 raise RuntimeError(f"Cannot connect to {server_addr}")
             stub = generate_pb2_grpc.ParamServiceStub(channel)
 
-            client_info["pid"] = current_pid
+            client_info["checked"] = True
             client_info["channel"] = channel
             client_info["stub"] = stub
 
     return client_info["stub"]
+
 
 def load_weight_from_ipc_handle(
     param: torch.Tensor, weight_name: str, server_addr: str = "localhost:60060"
@@ -204,9 +229,9 @@ def load_weight_from_ipc_handle(
         pass
         # print(f"Current H2D time: {H2D_TIME}s")
         # print(f"tensor {weight_name} load done")
-    
-    LIB_TIME += time.time()-start
-    print(f"Current Lib time: {LIB_TIME}s")
+
+    LIB_TIME += time.time() - start
+    # print(f"Current Lib time: {LIB_TIME}s")
     # profiler.disable()
 
 
@@ -216,6 +241,8 @@ def pull_model(model_name: str, server_addr: str = "localhost:60060"):
     # S2H_TIME = time.time()
     req = generate_pb2.PullModelRequest(model_name=model_name)
     res = stub.PullModel(req)
+    pid = os.getpid()
+    _grpc_clients[pid]["channel"].close()
     TASK_ID = res.task_id
     return TASK_ID
 
@@ -226,14 +253,16 @@ def check_model(server_addr="localhost:60060") -> bool:
     req = generate_pb2.CheckModelRequest(task_id=TASK_ID)
     res = stub.CheckModel(req)
     # if res.done:
-        # S2H_TIME = time.time() - S2H_TIME
-        # print(f"Load model time: {S2H_TIME}, bandwidth: {16 / S2H_TIME}GBps")
+    # S2H_TIME = time.time() - S2H_TIME
+    # print(f"Load model time: {S2H_TIME}, bandwidth: {16 / S2H_TIME}GBps")
     return res.done
+
 
 def print_profile():
     pass
     # stats = pstats.Stats(profiler).sort_stats("cumtime")
     # stats.print_stats()
+
 
 def _dump_tensor(tensor, tensor_name, out_dir):
     tensor = tensor.cpu()
@@ -250,6 +279,7 @@ def _dump_tensor(tensor, tensor_name, out_dir):
     with open(f"/tmp/{out_dir}/{tensor_name}.bin", "wb") as f:
         f.write(bytes_data)
         f.close()
+
 
 # FIXME: gguf not applied
 def vllm_hook(func):

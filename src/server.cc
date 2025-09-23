@@ -4,7 +4,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <grpcpp/ext/proto_server_reflection_plugin.h>
 #include <grpcpp/grpcpp.h>
+#include <grpcpp/health_check_service_interface.h>
 #include <grpcpp/server_context.h>
 #include <grpcpp/support/status.h>
 #include <iomanip>
@@ -162,7 +164,13 @@ public:
     return oss.str();
   }
 
+  void set_health_check_service(
+      grpc::HealthCheckServiceInterface *health_check_service) {
+    health_check_service_ = health_check_service;
+  }
+
 private:
+  grpc::HealthCheckServiceInterface *health_check_service_ = nullptr;
   std::unique_ptr<blitz::BlitzEngine> engine_ptr;
   std::map<std::string, bool> task_map;
   size_t elaspse_all = 0;
@@ -174,14 +182,15 @@ private:
 
 static void RunServer(const std::string &addr) {
   std::vector<int> devices = {0};
-  generate::v2::ParamServiceImpl service(devices);
 
+  generate::v2::ParamServiceImpl service(devices);
   grpc::EnableDefaultHealthCheckService(true);
   ServerBuilder builder;
   builder.AddListeningPort(addr, grpc::InsecureServerCredentials());
   builder.RegisterService(&service);
 
   std::unique_ptr<Server> server(builder.BuildAndStart());
+  service.set_health_check_service(server->GetHealthCheckService());
   std::cout << "TextGenerationService listening on " << addr << std::endl;
   server->Wait();
 }
