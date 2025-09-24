@@ -1,0 +1,59 @@
+syntax = "proto2";
+
+package generate.v2;
+
+
+service ParamService {
+    // Request to load model from repo
+    rpc PullModel(PullModelRequest) returns (PullModelResponse) {}
+    // Request to check model loading status
+    rpc CheckModel(CheckModelRequest) returns (CheckModelResponse) {}
+    // Request to load weights to torch.Tensor, engine returns a shm/gpu ptr, clients to move data
+    rpc LoadWeight(LoadWeightRequest) returns (LoadWeightResponse) {}
+    // Request to get c++ memory handler
+    rpc GetHandler(GetHandlerRequest) returns (GetHandlerResponse) {}
+    // Request to inform engine that handler can be destroyed
+    rpc RevertHandler(RevertHandlerRequest) returns (RevertHandlerResponse) {}
+}
+
+message GetHandlerRequest{
+    required string tensor_name = 1;
+    required uint64 tensor_size = 2;
+}
+
+message GetHandlerResponse {
+    required bytes ipc_handler = 1;
+    required uint64 offset = 2;
+    optional uint64 loaded_size = 3;
+}
+
+message RevertHandlerRequest{
+    required string tensor_name = 1;
+    required uint64 tensor_size = 2;
+}
+
+message RevertHandlerResponse {}
+
+message PullModelRequest {
+    // model name or path
+    required string model_name = 1;
+}
+message PullModelResponse {
+    required string task_id = 1;
+}
+
+message CheckModelRequest {
+    required string task_id = 1;
+}
+
+message CheckModelResponse {
+    required bool done = 1;
+}
+
+message LoadWeightRequest{
+    required bytes ipc_handle = 1;
+    required uint64 tensor_size = 2;
+    required uint32 tensor_device = 3;
+    required string tensor_name = 4;
+}
+message LoadWeightResponse{}

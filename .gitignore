@@ -1,3 +1,4 @@
+*.log
 # Prerequisites
 *.d
 
@@ -39,3 +40,10 @@
 
 # debug information files
 *.dwo
+
+.vscode/
+.cache/
+blitz_lib.egg-info/
+build/
+dist/
+__pycache__/
