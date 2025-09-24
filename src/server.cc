@@ -199,7 +199,7 @@ static void RunServer(const std::string &addr) {
 
 int main(int argc, char **argv) {
   UnsetProxyEnv();
-  std::string addr = "0.0.0.0:60060";
+  std::string addr = "unix:///tmp/grpc.sock";
   if (argc >= 2) {
     addr = argv[1];
   }

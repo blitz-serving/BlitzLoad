@@ -206,9 +206,12 @@ public:
     std::lock_guard<std::mutex> guard(mutexs[write_idx]);
     auto status =
         buffers[write_idx]->mem_to_buffer(source, buffer_group_read_size);
-    if (status != EMPTY && status != END) {
+    if (status == READY) {
       write_idx = (write_idx + 1) % group_size;
     }
+    // if (status != READY && status != END) {
+    //   write_idx = (write_idx + 1) % group_size;
+    // }
     return status;
   }
 

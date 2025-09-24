@@ -162,7 +162,7 @@ def _get_stub(server_addr: str, refresh_stub: bool = False):
 
 
 def load_weight_from_ipc_handle(
-    param: torch.Tensor, weight_name: str, server_addr: str = "localhost:60060"
+    param: torch.Tensor, weight_name: str, server_addr: str = "unix:///tmp/grpc.sock"
 ) -> None:
     global LIB_TIME
     rank = _rank_info[os.getpid()]
@@ -179,7 +179,12 @@ def load_weight_from_ipc_handle(
         # H2D_TIME += time.time()-start
     except grpc.RpcError as e:
         print("GetHandler RPC failed:", e.code(), e.details(), flush=True)
-        return
+        stub = _get_stub(server_addr, True)
+        try:
+            res = stub.GetHandler(req, timeout=5.0)
+        except grpc.RpcError as e:
+            print("GetHandler RPC failed:", e.code(), e.details(), flush=True)
+            return
 
     handle_bytes = res.ipc_handler
     loaded_bytes = res.loaded_size
@@ -204,7 +209,16 @@ def load_weight_from_ipc_handle(
                 rank=rank,
             )
             # start = time.time()
-            res = stub.GetHandler(req)
+            try:
+                res = stub.GetHandler(req, timeout=5.0)
+            except grpc.RpcError as e:
+                print("GetHandler RPC failed:", e.code(), e.details(), flush=True)
+                stub = _get_stub(server_addr, True)
+                try:
+                    res = stub.GetHandler(req, timeout=5.0)
+                except grpc.RpcError as e:
+                    print("GetHandler RPC failed:", e.code(), e.details(), flush=True)
+                    return
             # H2D_TIME += time.time() - start
             handle_bytes = res.ipc_handler
             new_loaded_bytes = res.loaded_size
@@ -221,10 +235,14 @@ def load_weight_from_ipc_handle(
             )
 
             loaded_bytes += new_loaded_bytes
-            req = generate_pb2.RevertHandlerRequest(
-                tensor_name=weight_name, tensor_size=new_loaded_bytes, rank=rank
-            )
-            stub.RevertHandler(req)
+            try:
+                req = generate_pb2.RevertHandlerRequest(
+                    tensor_name=weight_name, tensor_size=new_loaded_bytes, rank=rank
+                )
+                stub.RevertHandler(req)
+            except grpc.RpcError as e:
+                print("RevertHandler RPC failed:", e.code(), e.details(), flush=True)
+                return
             # print(f"Current H2D time: {H2D_TIME}s")
     else:
         pass
@@ -236,19 +254,19 @@ def load_weight_from_ipc_handle(
     # profiler.disable()
 
 
-def pull_model(model_name: str, world_size: int, server_addr: str = "localhost:60060"):
+def pull_model(model_name: str, world_size: int, server_addr: str = "unix:///tmp/grpc.sock"):
     global TASK_ID, S2H_TIME
     stub = _get_stub(server_addr)
     # S2H_TIME = time.time()
     req = generate_pb2.PullModelRequest(model_name=model_name, world_size=world_size)
     res = stub.PullModel(req)
     pid = os.getpid()
-    _grpc_clients[pid]["channel"].close()
+    # _grpc_clients[pid]["channel"].close()
     TASK_ID = res.task_id
     return TASK_ID
 
 
-def check_model(server_addr="localhost:60060") -> bool:
+def check_model(server_addr="unix:///tmp/grpc.sock") -> bool:
     # global S2H_TIME
     stub = _get_stub(server_addr)
     req = generate_pb2.CheckModelRequest(task_id=TASK_ID)
