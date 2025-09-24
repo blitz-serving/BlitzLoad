@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0egenerate.proto\x12\x0bgenerate.v2\"=\n\x11GetHandlerRequest\x12\x13\n\x0btensor_name\x18\x01 \x02(\t\x12\x13\n\x0btensor_size\x18\x02 \x02(\x04\"N\n\x12GetHandlerResponse\x12\x13\n\x0bipc_handler\x18\x01 \x02(\x0c\x12\x0e\n\x06offset\x18\x02 \x02(\x04\x12\x13\n\x0bloaded_size\x18\x03 \x01(\x04\"@\n\x14RevertHandlerRequest\x12\x13\n\x0btensor_name\x18\x01 \x02(\t\x12\x13\n\x0btensor_size\x18\x02 \x02(\x04\"\x17\n\x15RevertHandlerResponse\"&\n\x10PullModelRequest\x12\x12\n\nmodel_name\x18\x01 \x02(\t\"$\n\x11PullModelResponse\x12\x0f\n\x07task_id\x18\x01 \x02(\t\"$\n\x11\x43heckModelRequest\x12\x0f\n\x07task_id\x18\x01 \x02(\t\"\"\n\x12\x43heckModelResponse\x12\x0c\n\x04\x64one\x18\x01 \x02(\x08\"h\n\x11LoadWeightRequest\x12\x12\n\nipc_handle\x18\x01 \x02(\x0c\x12\x13\n\x0btensor_size\x18\x02 \x02(\x04\x12\x15\n\rtensor_device\x18\x03 \x02(\r\x12\x13\n\x0btensor_name\x18\x04 \x02(\t\"\x14\n\x12LoadWeightResponse2\xa9\x03\n\x0cParamService\x12L\n\tPullModel\x12\x1d.generate.v2.PullModelRequest\x1a\x1e.generate.v2.PullModelResponse\"\x00\x12O\n\nCheckModel\x12\x1e.generate.v2.CheckModelRequest\x1a\x1f.generate.v2.CheckModelResponse\"\x00\x12O\n\nLoadWeight\x12\x1e.generate.v2.LoadWeightRequest\x1a\x1f.generate.v2.LoadWeightResponse\"\x00\x12O\n\nGetHandler\x12\x1e.generate.v2.GetHandlerRequest\x1a\x1f.generate.v2.GetHandlerResponse\"\x00\x12X\n\rRevertHandler\x12!.generate.v2.RevertHandlerRequest\x1a\".generate.v2.RevertHandlerResponse\"\x00')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0egenerate.proto\x12\x0bgenerate.v2\"K\n\x11GetHandlerRequest\x12\x13\n\x0btensor_name\x18\x01 \x02(\t\x12\x13\n\x0btensor_size\x18\x02 \x02(\x04\x12\x0c\n\x04rank\x18\x03 \x02(\x05\"N\n\x12GetHandlerResponse\x12\x13\n\x0bipc_handler\x18\x01 \x02(\x0c\x12\x0e\n\x06offset\x18\x02 \x02(\x04\x12\x13\n\x0bloaded_size\x18\x03 \x01(\x04\"N\n\x14RevertHandlerRequest\x12\x13\n\x0btensor_name\x18\x01 \x02(\t\x12\x13\n\x0btensor_size\x18\x02 \x02(\x04\x12\x0c\n\x04rank\x18\x03 \x02(\x05\"\x17\n\x15RevertHandlerResponse\":\n\x10PullModelRequest\x12\x12\n\nmodel_name\x18\x01 \x02(\t\x12\x12\n\nworld_size\x18\x02 \x02(\x05\"$\n\x11PullModelResponse\x12\x0f\n\x07task_id\x18\x01 \x02(\t\"$\n\x11\x43heckModelRequest\x12\x0f\n\x07task_id\x18\x01 \x02(\t\"\"\n\x12\x43heckModelResponse\x12\x0c\n\x04\x64one\x18\x01 \x02(\x08\"h\n\x11LoadWeightRequest\x12\x12\n\nipc_handle\x18\x01 \x02(\x0c\x12\x13\n\x0btensor_size\x18\x02 \x02(\x04\x12\x15\n\rtensor_device\x18\x03 \x02(\r\x12\x13\n\x0btensor_name\x18\x04 \x02(\t\"\x14\n\x12LoadWeightResponse2\xa9\x03\n\x0cParamService\x12L\n\tPullModel\x12\x1d.generate.v2.PullModelRequest\x1a\x1e.generate.v2.PullModelResponse\"\x00\x12O\n\nCheckModel\x12\x1e.generate.v2.CheckModelRequest\x1a\x1f.generate.v2.CheckModelResponse\"\x00\x12O\n\nLoadWeight\x12\x1e.generate.v2.LoadWeightRequest\x1a\x1f.generate.v2.LoadWeightResponse\"\x00\x12O\n\nGetHandler\x12\x1e.generate.v2.GetHandlerRequest\x1a\x1f.generate.v2.GetHandlerResponse\"\x00\x12X\n\rRevertHandler\x12!.generate.v2.RevertHandlerRequest\x1a\".generate.v2.RevertHandlerResponse\"\x00')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,25 +32,25 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'generate_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_GETHANDLERREQUEST']._serialized_start=31
-  _globals['_GETHANDLERREQUEST']._serialized_end=92
-  _globals['_GETHANDLERRESPONSE']._serialized_start=94
-  _globals['_GETHANDLERRESPONSE']._serialized_end=172
-  _globals['_REVERTHANDLERREQUEST']._serialized_start=174
-  _globals['_REVERTHANDLERREQUEST']._serialized_end=238
-  _globals['_REVERTHANDLERRESPONSE']._serialized_start=240
-  _globals['_REVERTHANDLERRESPONSE']._serialized_end=263
-  _globals['_PULLMODELREQUEST']._serialized_start=265
-  _globals['_PULLMODELREQUEST']._serialized_end=303
-  _globals['_PULLMODELRESPONSE']._serialized_start=305
-  _globals['_PULLMODELRESPONSE']._serialized_end=341
-  _globals['_CHECKMODELREQUEST']._serialized_start=343
-  _globals['_CHECKMODELREQUEST']._serialized_end=379
-  _globals['_CHECKMODELRESPONSE']._serialized_start=381
-  _globals['_CHECKMODELRESPONSE']._serialized_end=415
-  _globals['_LOADWEIGHTREQUEST']._serialized_start=417
-  _globals['_LOADWEIGHTREQUEST']._serialized_end=521
-  _globals['_LOADWEIGHTRESPONSE']._serialized_start=523
-  _globals['_LOADWEIGHTRESPONSE']._serialized_end=543
-  _globals['_PARAMSERVICE']._serialized_start=546
-  _globals['_PARAMSERVICE']._serialized_end=971
+  _globals['_GETHANDLERREQUEST']._serialized_end=106
+  _globals['_GETHANDLERRESPONSE']._serialized_start=108
+  _globals['_GETHANDLERRESPONSE']._serialized_end=186
+  _globals['_REVERTHANDLERREQUEST']._serialized_start=188
+  _globals['_REVERTHANDLERREQUEST']._serialized_end=266
+  _globals['_REVERTHANDLERRESPONSE']._serialized_start=268
+  _globals['_REVERTHANDLERRESPONSE']._serialized_end=291
+  _globals['_PULLMODELREQUEST']._serialized_start=293
+  _globals['_PULLMODELREQUEST']._serialized_end=351
+  _globals['_PULLMODELRESPONSE']._serialized_start=353
+  _globals['_PULLMODELRESPONSE']._serialized_end=389
+  _globals['_CHECKMODELREQUEST']._serialized_start=391
+  _globals['_CHECKMODELREQUEST']._serialized_end=427
+  _globals['_CHECKMODELRESPONSE']._serialized_start=429
+  _globals['_CHECKMODELRESPONSE']._serialized_end=463
+  _globals['_LOADWEIGHTREQUEST']._serialized_start=465
+  _globals['_LOADWEIGHTREQUEST']._serialized_end=569
+  _globals['_LOADWEIGHTRESPONSE']._serialized_start=571
+  _globals['_LOADWEIGHTRESPONSE']._serialized_end=591
+  _globals['_PARAMSERVICE']._serialized_start=594
+  _globals['_PARAMSERVICE']._serialized_end=1019
 # @@protoc_insertion_point(module_scope)

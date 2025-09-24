@@ -16,16 +16,16 @@ public:
   BlitzEngine(std::vector<int> buf_devices, size_t buf_size);
   ~BlitzEngine();
 
-  int ssd_to_mem(std::vector<std::string> files);
+  std::pair<std::string, int> ssd_to_mem(std::vector<std::string> files);
   void mem_to_tensor(cudaIpcMemHandle_t &handle, std::string tensor_name,
                      size_t tensor_size, int tensor_device);
 
-  void mem_to_buffer(int shard_num);
+  void mem_to_buffer(std::string model_path, int rank_num);
   void buffer_to_tensor(cudaIpcMemHandle_t &handle, int tensor_device,
-                        size_t tensor_size, int shard_id); // deprecated
+                        size_t tensor_size, int rank); // deprecated
   size_t export_handler(cudaIpcMemHandle_t *handle, size_t *offset,
-                        size_t tensor_size, int shard_id);
-  void free_handler(size_t tensor_size, int shard_id);
+                        size_t tensor_size, int rank);
+  void free_handler(size_t tensor_size, int rank);
 
 private:
   std::vector<std::thread> threads;
@@ -39,6 +39,8 @@ private:
   /// enable m*(m-1)/2 access
   void enable_p2p_access(std::vector<int> devices);
   // in non-rdma case, ssd -> mem
-  std::map<int, std::unique_ptr<dangertensor::DangerTensor>> dangertensor_map;
+  std::map<std::string,
+           std::map<int, std::unique_ptr<dangertensor::DangerTensor>>>
+      dangertensor_map;
 };
 } // namespace blitz

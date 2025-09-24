@@ -80,8 +80,8 @@ public:
     auto id = sha256(data);
     task_map[id] = false;
     std::thread([this, bin_files, id] {
-      engine_ptr->ssd_to_mem(bin_files);
-      engine_ptr->mem_to_buffer(bin_files.size());
+      auto [model_path, rank_num] = engine_ptr->ssd_to_mem(bin_files);
+      engine_ptr->mem_to_buffer(model_path, rank_num);
       task_map[id] = true;
     }).detach();
     resp->set_task_id(id);
@@ -94,7 +94,7 @@ public:
                     CheckModelResponse *resp) override {
     auto res = task_map[req->task_id()];
     resp->set_done(res);
-    spdlog::info("Model loaded? {}, task_id {}", res, req->task_id());
+    // spdlog::info("Model loaded? {}, task_id {}", res, req->task_id());
 
     return Status::OK;
   }
@@ -123,8 +123,9 @@ public:
     cudaIpcMemHandle_t handle;
     size_t offset = 0;
     // FIXME: hard code shard_id = 0
+    auto rank_ = req->rank();
     auto loaded_size =
-        engine_ptr->export_handler(&handle, &offset, req->tensor_size(), 0);
+        engine_ptr->export_handler(&handle, &offset, req->tensor_size(), rank_);
     resp->set_ipc_handler(reinterpret_cast<const char *>(&handle),
                           sizeof(handle));
     resp->set_offset(offset);
@@ -143,7 +144,8 @@ public:
   Status RevertHandler(ServerContext *ctx, const RevertHandlerRequest *req,
                        RevertHandlerResponse *resp) override {
     auto start = std::chrono::steady_clock::now();
-    engine_ptr->free_handler(req->tensor_size(), 0);
+    auto rank_ = req->rank();
+    engine_ptr->free_handler(req->tensor_size(), rank_);
     auto end = std::chrono::steady_clock::now();
     auto elapse_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(end - start)

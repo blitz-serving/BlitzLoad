@@ -56,21 +56,22 @@ def compare_directories(dir1, dir2):
 
     return results, only_in_dir1, only_in_dir2
 
-num = count_bit_differences(
-    "/tmp/blitz/model.embed_tokens.weight.bin",
-    "/tmp/vllm/model.embed_tokens.weight.bin",
-)
+# num = count_bit_differences(
+#     "/tmp/blitz/model.embed_tokens.weight.bin",
+#     "/tmp/vllm/model.embed_tokens.weight.bin",
+# )
 
 
 if __name__ == "__main__":
-    dir1 = "/tmp/blitz"
+    dir1 = "/tmp/blitz_new"
     dir2 = "/tmp/vllm"
 
     results, only1, only2 = compare_directories(dir1, dir2)
 
     for fname, status in results.items():
-        print(f"{fname}: {status}")
-    if only1:
-        print("仅在目录1:", only1)
-    if only2:
-        print("仅在目录2:", only2)
+        if status == "不同":
+            print(f"{fname}: {status}")
+    # if only1:
+    #     print("仅在目录1:", only1)
+    # if only2:
+    #     print("仅在目录2:", only2)
