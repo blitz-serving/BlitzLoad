@@ -1,0 +1,380 @@
+diff --git a/vllm/entrypoints/llm.py b/vllm/entrypoints/llm.py
+index 915f14a29..9628ae9f5 100644
+--- a/vllm/entrypoints/llm.py
++++ b/vllm/entrypoints/llm.py
+@@ -2,6 +2,8 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
+ import itertools
++import blitz_lib
++
+ from collections.abc import Sequence
+ from contextlib import contextmanager
+ from typing import (TYPE_CHECKING, Any, Callable, ClassVar, Optional, Union,
+@@ -276,7 +278,7 @@ class LLM:
+         )
+ 
+         log_non_default_args(engine_args)
+-
++        blitz_lib.pull_model(model)
+         # Create the Engine (autoselects V0 vs V1)
+         self.llm_engine = LLMEngine.from_engine_args(
+             engine_args=engine_args, usage_context=UsageContext.LLM_CLASS)
+diff --git a/vllm/model_executor/layers/linear.py b/vllm/model_executor/layers/linear.py
+index 75391c51f..212bb6134 100644
+--- a/vllm/model_executor/layers/linear.py
++++ b/vllm/model_executor/layers/linear.py
+@@ -2,6 +2,7 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
+ import itertools
++from blitz_lib import vllm_hook
+ from abc import abstractmethod
+ from typing import Any, Literal, Optional, Union
+ 
+@@ -333,6 +334,7 @@ class ReplicatedLinear(LinearBase):
+         else:
+             self.register_parameter("bias", None)
+ 
++    @vllm_hook
+     def weight_loader(self, param: Parameter, loaded_weight: torch.Tensor):
+         # If the weight on disk does not have a shape, give it one
+         # (such scales for AutoFp8).
+@@ -528,6 +530,7 @@ class ColumnParallelLinear(LinearBase):
+ 
+         self.tp_rank = get_tensor_model_parallel_rank()
+ 
++    @vllm_hook
+     def weight_loader(self, param: Parameter, loaded_weight: torch.Tensor):
+ 
+         output_dim = getattr(param, "output_dim", None)
+@@ -656,6 +659,7 @@ class MergedColumnParallelLinear(ColumnParallelLinear):
+                          prefix=prefix,
+                          return_bias=return_bias)
+ 
++    @vllm_hook
+     def weight_loader(self,
+                       param: Parameter,
+                       loaded_weight: torch.Tensor,
+@@ -1045,6 +1049,7 @@ class QKVParallelLinear(ColumnParallelLinear):
+                               shard_offset=shard_offset,
+                               shard_size=shard_size)
+ 
++    @vllm_hook
+     def weight_loader(self,
+                       param: Parameter,
+                       loaded_weight: torch.Tensor,
+@@ -1317,6 +1322,7 @@ class RowParallelLinear(LinearBase):
+         else:
+             self.register_parameter("bias", None)
+ 
++    @vllm_hook
+     def weight_loader(self, param: Parameter, loaded_weight: torch.Tensor):
+         input_dim = getattr(param, "input_dim", None)
+         use_bitsandbytes_4bit = getattr(param, "use_bitsandbytes_4bit", False)
+diff --git a/vllm/model_executor/layers/vocab_parallel_embedding.py b/vllm/model_executor/layers/vocab_parallel_embedding.py
+index 9f223998e..b41622e2b 100644
+--- a/vllm/model_executor/layers/vocab_parallel_embedding.py
++++ b/vllm/model_executor/layers/vocab_parallel_embedding.py
+@@ -211,6 +211,7 @@ class VocabParallelEmbedding(CustomOp):
+         super().__init__()
+ 
+         # Keep the input dimensions.
++        self.prefix = prefix
+         tp_rank = get_tensor_model_parallel_rank()
+         self.tp_size = get_tensor_model_parallel_world_size()
+         self.num_embeddings = num_embeddings
+@@ -368,8 +369,11 @@ class VocabParallelEmbedding(CustomOp):
+         # If parameter does not have output dim, then it should
+         # be copied onto all gpus (e.g. g_idx for act_order gptq).
+         if output_dim is None:
+-            assert param.data.shape == loaded_weight.shape
+-            param.data.copy_(loaded_weight)
++            import blitz_lib
++            print("Loading tensor Embedding")
++            blitz_lib.load_weight_from_ipc_handle(param, self.prefix)
++            # assert param.data.shape == loaded_weight.shape
++            # param.data.copy_(loaded_weight)
+             return
+ 
+         # Shard indexes for loading the weight
+@@ -386,12 +390,16 @@ class VocabParallelEmbedding(CustomOp):
+             start_idx = start_idx // packed_factor
+             shard_size = shard_size // packed_factor
+         else:
+-            assert loaded_weight.shape[output_dim] == self.org_vocab_size
++            pass
++            # assert loaded_weight.shape[output_dim] == self.org_vocab_size
+ 
+         # Copy the data. Select chunk corresponding to current shard.
+-        loaded_weight = loaded_weight.narrow(output_dim, start_idx, shard_size)
+-        param[:loaded_weight.shape[0]].data.copy_(loaded_weight)
+-        param[loaded_weight.shape[0]:].data.fill_(0)
++        import blitz_lib
++        print("Tensor embedding")
++        blitz_lib.load_weight_from_ipc_handle(param, self.prefix)
++        # loaded_weight = loaded_weight.narrow(output_dim, start_idx, shard_size)
++        # param[:loaded_weight.shape[0]].data.copy_(loaded_weight)
++        # param[loaded_weight.shape[0]:].data.fill_(0)
+ 
+     def forward(self, input_):
+         if self.tp_size > 1:
+diff --git a/vllm/model_executor/model_loader/default_loader.py b/vllm/model_executor/model_loader/default_loader.py
+index 2b8e44275..ddd8a4b87 100644
+--- a/vllm/model_executor/model_loader/default_loader.py
++++ b/vllm/model_executor/model_loader/default_loader.py
+@@ -20,7 +20,7 @@ from vllm.model_executor.model_loader.weight_utils import (
+     download_safetensors_index_file_from_hf, download_weights_from_hf,
+     fastsafetensors_weights_iterator, filter_duplicate_safetensors_files,
+     filter_files_not_needed_for_inference, get_lock, np_cache_weights_iterator,
+-    pt_weights_iterator, safetensors_weights_iterator)
++    pt_weights_iterator, safetensors_weights_iterator, dangertensors_weights_iterator)
+ from vllm.platforms import current_platform
+ 
+ logger = init_logger(__name__)
+@@ -171,13 +171,32 @@ class DefaultModelLoader(BaseModelLoader):
+ 
+         return hf_folder, hf_weights_files, use_safetensors
+ 
++    def _prepare_dangertensors(self, directory):
++        import re
++        pattern = re.compile(r"dangertensors\.(\d+)\.meta$")
++        files_with_number = []
++
++        for root, _, files in os.walk(directory):
++            for f in files:
++                match = pattern.match(f)
++                if match:
++                    number = int(match.group(1))
++                    files_with_number.append((number, os.path.join(root, f)))
++
++        files_with_number.sort(key=lambda x: x[0])
++
++        # 只要文件路径
++        return [path for _, path in files_with_number]
++
+     def _get_weights_iterator(
+             self, source: "Source"
+     ) -> Generator[tuple[str, torch.Tensor], None, None]:
+         """Get an iterator for the model weights based on the load format."""
+-        hf_folder, hf_weights_files, use_safetensors = self._prepare_weights(
+-            source.model_or_path, source.revision, source.fall_back_to_pt,
+-            source.allow_patterns_overrides)
++        # hf_folder, hf_weights_files, use_safetensors = self._prepare_weights(
++        #     source.model_or_path, source.revision, source.fall_back_to_pt,
++        #     source.allow_patterns_overrides)
++        hf_folder, hf_weights_files, use_safetensors, use_dangetensors = ("", [], False, True)
++        danger_metas = self._prepare_dangertensors(source.model_or_path)
+         if self.load_config.load_format == "npcache":
+             # Currently np_cache only support *.bin checkpoints
+             assert use_safetensors is False
+@@ -199,6 +218,12 @@ class DefaultModelLoader(BaseModelLoader):
+                     hf_weights_files,
+                     self.load_config.use_tqdm_on_load,
+                 )
++        elif use_dangetensors:
++            import blitz_lib
++            pull_done = False
++            while not pull_done:
++                pull_done = blitz_lib.check_model()
++            weights_iterator = dangertensors_weights_iterator(danger_metas, self.load_config.use_tqdm_on_load)
+         else:
+             weights_iterator = pt_weights_iterator(
+                 hf_weights_files,
+@@ -221,7 +246,9 @@ class DefaultModelLoader(BaseModelLoader):
+         if self.counter_before_loading_weights == 0.0:
+             self.counter_before_loading_weights = time.perf_counter()
+         # Apply the prefix.
+-        return ((source.prefix + name, tensor)
++        # return ((source.prefix + name, tensor)
++        #         for (name, tensor) in weights_iterator)
++        return ((name, tensor)
+                 for (name, tensor) in weights_iterator)
+ 
+     def get_all_weights(
+diff --git a/vllm/model_executor/model_loader/weight_utils.py b/vllm/model_executor/model_loader/weight_utils.py
+index 78b186265..719163102 100644
+--- a/vllm/model_executor/model_loader/weight_utils.py
++++ b/vllm/model_executor/model_loader/weight_utils.py
+@@ -29,6 +29,10 @@ from vllm.model_executor.layers.quantization import (QuantizationConfig,
+ from vllm.platforms import current_platform
+ from vllm.utils import PlaceholderModule
+ 
++from vllm.logger import init_logger
++
++logger = init_logger(__name__)
++
+ try:
+     from runai_model_streamer import SafetensorsStreamer
+ except (ImportError, OSError):
+@@ -60,6 +64,7 @@ logger = init_logger(__name__)
+ # system reboots, so users will not complain about annoying lock files
+ temp_dir = tempfile.gettempdir()
+ 
++alltime = 0
+ 
+ def enable_hf_transfer():
+     """automatically activates hf_transfer
+@@ -476,6 +481,31 @@ def safetensors_weights_iterator(
+                 yield name, param
+ 
+ 
++def dangertensors_weights_iterator(
++    danger_metas: list[str],
++    use_tqdm_on_load: bool,
++) -> Generator[tuple[str, torch.Tensor], None, None]:
++    """Iterate over the weights in the model safetensor files."""
++    for st_file in tqdm(
++        danger_metas,
++        desc="Loading safetensors checkpoint shards",
++        disable=not enable_tqdm(use_tqdm_on_load),
++        bar_format=_BAR_FORMAT,
++    ):
++        with open(st_file, 'r', encoding='utf-8') as f:
++            lines = f.readlines()[1:]
++            for line in lines:
++                line = line.strip()
++                name, _ = line.rsplit(" ", 1)
++                yield name, torch.zeros(1)
++        pass
++        # with safe_open(st_file, framework="pt") as f:
++        #     for name in f.keys():  # noqa: SIM118
++        #         # param = f.get_tensor(name)
++        #         param = torch.zeros(1)
++        #         yield name, param
++                # yield name, param
++
+ def runai_safetensors_weights_iterator(
+     hf_weights_files: list[str],
+     use_tqdm_on_load: bool,
+@@ -611,21 +641,37 @@ def convert_pyslice_to_tensor(x: Any) -> torch.Tensor:
+     return x
+ 
+ 
+-def default_weight_loader(param: torch.Tensor,
+-                          loaded_weight: torch.Tensor) -> None:
+-    """Default weight loader."""
++# def default_weight_loader(param: torch.Tensor,
++#                           loaded_weight: torch.Tensor) -> None:
++#     """Default weight loader."""
++#     try:
++#         if param.numel() == 1 and loaded_weight.numel() == 1:
++#             # Sometimes scalar values aren't considered tensors with shapes
++#             # so if both param and loaded_weight are a scalar,
++#             # "broadcast" instead of copy
++#             param.data.fill_(loaded_weight.item())
++#         else:
++#             assert param.size() == loaded_weight.size(), (
++#                 f"Attempted to load weight ({loaded_weight.size()}) "
++#                 f"into parameter ({param.size()})")
++
++#             param.data.copy_(loaded_weight)
++#     except Exception:
++#         # NOTE: This exception is added for the purpose of setting breakpoint to
++#         # debug weight loading issues.
++#         raise
++
++
++def default_weight_loader(param: torch.Tensor, loaded_weight: torch.Tensor, name = None) -> None:
++    """Blitz weight loader."""
+     try:
+-        if param.numel() == 1 and loaded_weight.numel() == 1:
+-            # Sometimes scalar values aren't considered tensors with shapes
+-            # so if both param and loaded_weight are a scalar,
+-            # "broadcast" instead of copy
+-            param.data.fill_(loaded_weight.item())
++        import blitz_lib 
++        # if name:
++        #     print(name, param.device, param.dtype, param.shape)
++        if name: 
++            blitz_lib.load_weight_from_ipc_handle(param, name)
+         else:
+-            assert param.size() == loaded_weight.size(), (
+-                f"Attempted to load weight ({loaded_weight.size()}) "
+-                f"into parameter ({param.size()})")
+-
+-            param.data.copy_(loaded_weight)
++            blitz_lib.load_weight_from_ipc_handle(param, "")
+     except Exception:
+         # NOTE: This exception is added for the purpose of setting breakpoint to
+         # debug weight loading issues.
+diff --git a/vllm/model_executor/models/llama.py b/vllm/model_executor/models/llama.py
+index 24cd448d8..b4f8152f1 100644
+--- a/vllm/model_executor/models/llama.py
++++ b/vllm/model_executor/models/llama.py
+@@ -56,6 +56,11 @@ from .utils import (AutoWeightsLoader, PPMissingLayer, extract_layer_index,
+                     maybe_prefix)
+ 
+ 
++from vllm.logger import init_logger
++logger = init_logger(__name__)
++
++cpu2gpu_time = 0
++
+ class LlamaMLP(nn.Module):
+ 
+     def __init__(
+@@ -398,6 +403,8 @@ class LlamaModel(nn.Module):
+ 
+     def load_weights(self, weights: Iterable[tuple[str,
+                                                    torch.Tensor]]) -> set[str]:
++        global cpu2gpu_time
++        import time
+         stacked_params_mapping = [
+             # (param_name, shard_name, shard_id)
+             (".qkv_proj", ".q_proj", "q"),
+@@ -409,6 +416,7 @@ class LlamaModel(nn.Module):
+         params_dict = dict(self.named_parameters())
+         loaded_params: set[str] = set()
+         for name, loaded_weight in weights:
++            logger.info(f"Loaded weight device: {loaded_weight.device}")
+             if "rotary_emb.inv_freq" in name:
+                 continue
+             if ("rotary_emb.cos_cached" in name
+@@ -424,7 +432,13 @@ class LlamaModel(nn.Module):
+                                         default_weight_loader)
+                 loaded_weight = (loaded_weight if loaded_weight.dim() == 0 else
+                                  loaded_weight[0])
++                start = time.time()
+                 weight_loader(param, loaded_weight)
++                end = time.time()
++                cpu2gpu_time += end - start
++                logger.info(
++                    f"weight loader: {weight_loader},CPU to GPU0 accumulated time: {cpu2gpu_time}"
++                )
+                 loaded_params.add(scale_name)
+                 continue
+             if "scale" in name:
+@@ -444,8 +458,15 @@ class LlamaModel(nn.Module):
+                     continue
+ 
+                 param = params_dict[name]
++                logger.info(f"Param shape: {param.shape}, param device: {param.device}")
+                 weight_loader = param.weight_loader
++                start = time.time()
+                 weight_loader(param, loaded_weight, shard_id)
++                end = time.time()
++                cpu2gpu_time += end - start
++                logger.info(
++                    f"weight loader: {weight_loader}, param device: {param.device}, CPU to GPU1 accumulated time: {cpu2gpu_time}"
++                )
+                 break
+             else:
+                 # Skip loading extra bias for GPTQ models.
+@@ -456,9 +477,14 @@ class LlamaModel(nn.Module):
+                     continue
+ 
+                 param = params_dict[name]
+-                weight_loader = getattr(param, "weight_loader",
+-                                        default_weight_loader)
++                weight_loader = getattr(param, "weight_loader", default_weight_loader)
++                start = time.time()
+                 weight_loader(param, loaded_weight)
++                end = time.time()
++                cpu2gpu_time += end - start
++                logger.info(
++                    f"weight loader: {weight_loader},CPU to GPU2 accumulated time: {cpu2gpu_time}"
++                )
+             loaded_params.add(name)
+         return loaded_params
+ 

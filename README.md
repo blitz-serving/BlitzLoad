@@ -68,6 +68,8 @@ pip install -e .
 
 modifies in vLLM code
 
+from commit hash b2c06509e58d8afefc1b5fb0f3d91f0cc9d9f279 apply changes.patch
+
 ```python
 # in llm.py, class LLM __init__
 import blitz_lib
