@@ -4,10 +4,12 @@ import ctypes
 import time
 import cProfile, pstats, io
 
+import json
 import functools
 import inspect
 from . import generate_pb2
 from . import generate_pb2_grpc
+from . import mq_types
 from grpc_health.v1 import health_pb2, health_pb2_grpc
 
 import os
@@ -161,6 +163,26 @@ def _get_stub(server_addr: str, refresh_stub: bool = False):
     return client_info["stub"]
 
 
+def load_tensor(param: torch.Tensor, weight_name: str, socket):
+    loaded_bytes = 0
+    rank = _rank_info[os.getpid()]
+    tensor_size = param.element_size() * param.nelement()
+    while loaded_bytes < tensor_size:
+        req = mq_types.LoadTensorRequest(
+            tensor_name=weight_name, tensor_size=tensor_size - loaded_bytes, rank=rank
+        )
+        resp_dict = _send_recv(socket, req)
+        resp = mq_types.LoadTensorResponse(
+            resp_dict["handler"], resp_dict["offset"], resp_dict["loaded_size"]
+        )
+        loaded_bytes += resp.loaded_size
+        device_ptr = cuda_mem_manager.cuda_ipc_handle_to_ptr(bytes(resp.handler)) + resp.offset
+        cuda_mem_manager.copy_device_to_tensor(device_ptr, param, resp.loaded_size)
+
+        req = mq_types.RevertHandlerRequest(weight_name, resp.loaded_size, rank)
+        _send_recv(socket, req)
+
+
 def load_weight_from_ipc_handle(
     param: torch.Tensor, weight_name: str, server_addr: str = "unix:///tmp/grpc.sock"
 ) -> None:
@@ -254,7 +276,9 @@ def load_weight_from_ipc_handle(
     # profiler.disable()
 
 
-def pull_model(model_name: str, world_size: int, server_addr: str = "unix:///tmp/grpc.sock"):
+def pull_model(
+    model_name: str, world_size: int, server_addr: str = "unix:///tmp/grpc.sock"
+):
     global TASK_ID, S2H_TIME
     stub = _get_stub(server_addr)
     # S2H_TIME = time.time()
@@ -317,3 +341,11 @@ def vllm_hook(func):
         # _dump_tensor(val, bound.arguments[param_names[0]].prefix)
 
     return wrapper
+
+
+def _send_recv(socket, object):
+    req_json = json.dumps(object.__dict__)
+    socket.send_string(req_json)
+    reply = socket.recv_string()
+    resp_dict = json.loads(reply)
+    return resp_dict
