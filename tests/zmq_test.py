@@ -20,34 +20,33 @@ def send_recv(socket, object):
 
 def main():
     blitz_lib.register_rank(0)
-    context = zmq.Context()
-    model_path = "/nvme/ly/tmp_files2"
-    socket = context.socket(zmq.REQ)
-    socket.connect("tcp://localhost:55555")
-    socket2 = context.socket(zmq.REQ)
-    socket2.connect("tcp://localhost:55556")
-    socket3 = context.socket(zmq.REQ)
-    socket3.connect("tcp://localhost:55557")
-    socket3.connect("tcp://localhost:55558")
+    model_path = "/nvme/ly/tmp_files"
+    blitz_lib.pull_model(model_path, 1)
+    # context = zmq.Context()
+    # socket = context.socket(zmq.REQ)
+    # socket.connect("tcp://localhost:55555")
+    # socket2 = context.socket(zmq.REQ)
+    # socket2.connect("tcp://localhost:55556")
+    # socket3 = context.socket(zmq.REQ)
+    # socket3.connect("tcp://localhost:55557")
+    # socket3.connect("tcp://localhost:55558")
 
-    req = PullModelRequest(model_path, 1)
-    resp_dict = send_recv(socket, req)
-    resp = PullModelResponse(resp_dict["task_id"])
-    task_id = resp.task_id
+    # req = PullModelRequest(model_path, 1)
+    # resp_dict = send_recv(socket, req)
+    # resp = PullModelResponse(resp_dict["task_id"])
+    # task_id = resp.task_id
 
-    print("Received task_id:", resp.task_id)
+    # print("Received task_id:", resp.task_id)
 
     import time
 
-    time.sleep(5)
+    time.sleep(10)
     done = False
     while not done:
         time.sleep(0.5)
-        req = CheckModelRequest(model_path, task_id)
-        resp_dict = send_recv(socket2, req)
-        done = resp_dict["done"]
+        done = blitz_lib.check_model(model_path)
 
-    st_file = "/nvme/ly/tmp_files2/dangertensors.0.meta"
+    st_file = f"{model_path}/dangertensors.0.meta"
     with open(st_file, "r", encoding="utf-8") as f:
         lines = f.readlines()[1:]
         for line in lines:
@@ -57,7 +56,7 @@ def main():
             param = torch.zeros(
                 (int(int(length) / 2)), device="cuda:0", dtype=torch.bfloat16
             )
-            blitz_lib.load_tensor(param, name, socket3)
+            blitz_lib.load_tensor(param, name)
 
             print(param[-15:].float().cpu().numpy())
 

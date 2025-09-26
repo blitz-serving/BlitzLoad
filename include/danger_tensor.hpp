@@ -132,7 +132,8 @@ public:
   }
 
   std::pair<size_t, bool> mem_to_buffer(void *buffer_ptr, size_t buffer_size,
-                                        size_t buffer_read_size) {
+                                        size_t buffer_read_size, int buffer_idx,
+                                        int device) {
     LOG_ASSERT(valid, "File hasn't been loaded");
     auto it = std::upper_bound(
         metas_vec.begin(), metas_vec.end(), buffer_read_size,
@@ -149,19 +150,24 @@ public:
           (__nv_bfloat16 *)(host_weight_segment + start_offset + loaded_size);
       loaded_size += ls;
       first_tensor_offset = 0;
-      spdlog::info("Loading {}, values: [{}, {}, {}]", it->name,
-                   __bfloat162float(*val), __bfloat162float(*(val + 1)),
-                   __bfloat162float(*(val + 2)));
+      spdlog::info("[Buffer {}:{}] Loading {}, values: [{}, {}, {}]", device,
+                   buffer_idx, it->name, __bfloat162float(*val),
+                   __bfloat162float(*(val + 1)), __bfloat162float(*(val + 2)));
       it++;
     }
     if (it != metas_vec.end() && loaded_size == 0 &&
         it->data_length > buffer_size) {
       // single tensor size > buffer size, truncate
-      spdlog::info("Should truncate tensor {}", it->name);
+      __nv_bfloat16 *val =
+          (__nv_bfloat16 *)(host_weight_segment + start_offset);
+      spdlog::info("[Buffer {}:{}] loading partial {}, should truncate, "
+                   "values: [{}, {}, {}]",
+                   device, buffer_idx, it->name, __bfloat162float(*val),
+                   __bfloat162float(*(val + 1)), __bfloat162float(*(val + 2)));
       loaded_size = buffer_size;
     }
-    spdlog::info("load size: 0x{:x}:0x{:x}, read done: {}", loaded_size,
-                 buffer_size, it == metas_vec.end());
+    // spdlog::info("load size: 0x{:x}:0x{:x}, read done: {}", loaded_size,
+    //              buffer_size, it == metas_vec.end());
     CUDA_CHECK(cudaMemcpyAsync(buffer_ptr, host_weight_segment + start_offset,
                                loaded_size, cudaMemcpyHostToDevice, 0));
     CUDA_CHECK(cudaStreamSynchronize(0));

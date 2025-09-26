@@ -24,6 +24,10 @@
 
 using nlohmann::json;
 
+std::atomic<bool> running{true};
+
+void signal_handler(int) { running = false; }
+
 class Mq_Server {
 public:
   Mq_Server(std::vector<int> devices, size_t buffer_size) {
@@ -53,7 +57,7 @@ public:
         {revert_socket, 0, ZMQ_POLLIN, 0},
     };
 
-    while (true) {
+    while (running) {
       zmq::poll(items, 4, std::chrono::milliseconds(-1));
 
       if (items[0].revents & ZMQ_POLLIN) {
