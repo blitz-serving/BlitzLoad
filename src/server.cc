@@ -76,12 +76,13 @@ public:
     } catch (const std::exception &e) {
       spdlog::error("Error: {}", e.what());
     }
+    std::string model_name = req->model_name();
     std::string data = req->model_name() + std::to_string(time(nullptr));
     auto id = sha256(data);
     task_map[id] = false;
-    std::thread([this, bin_files, id] {
-      auto [model_path, rank_num] = engine_ptr->ssd_to_mem(bin_files);
-      engine_ptr->mem_to_buffer(model_path, rank_num);
+    std::thread([this, bin_files, id, model_name] {
+      auto rank_num = engine_ptr->pull_model(model_name);
+      engine_ptr->mem_to_buffer(model_name, rank_num);
       task_map[id] = true;
     }).detach();
     resp->set_task_id(id);

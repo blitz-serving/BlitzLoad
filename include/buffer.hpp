@@ -104,7 +104,7 @@ public:
                  __bfloat162float(vals[1]), __bfloat162float(vals[2]));
     CUDA_CHECK(cudaIpcGetMemHandle(handle, buffer_ptr));
     *offset = planned_used_size.load();
-    spdlog::info("Export tensor size: {}", load_tensor_size);
+    spdlog::info("Export tensor size: 0x{:x}", load_tensor_size);
     planned_used_size += load_tensor_size;
     // spdlog::info("Export handler, length {}, planned:usable {}:{}",
     //              load_tensor_size, planned_used_size.load(),

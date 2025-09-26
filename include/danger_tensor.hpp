@@ -79,13 +79,14 @@ public:
     auto start = std::chrono::high_resolution_clock::now();
 
     std::vector<std::future<int>> as;
+    size_t total_chunks =
+        (file_size + chunk_size_in_bytes - 1) / chunk_size_in_bytes;
+    size_t chunk_per_thrd = (total_chunks + nthreads - 1) / nthreads;
     for (size_t i = 0; i < nthreads; ++i) {
-      size_t total_chunks =
-          (file_size + chunk_size_in_bytes - 1) / chunk_size_in_bytes;
-      size_t chunk_per_thrd = (i < nthreads - 1)
-                                  ? (total_chunks + nthreads - 1) / nthreads
-                                  : total_chunks / nthreads;
       size_t partition_offset = i * chunk_per_thrd * chunk_size_in_bytes;
+      if (i == nthreads - 1) {
+        chunk_per_thrd = total_chunks - (nthreads - 2) * chunk_per_thrd;
+      }
 
       as.emplace_back(
           std::async(std::launch::async, [this, file_size, fd, chunk_per_thrd,
@@ -159,8 +160,8 @@ public:
       spdlog::info("Should truncate tensor {}", it->name);
       loaded_size = buffer_size;
     }
-    spdlog::info("load size: {}:{}, read done: {}", loaded_size, buffer_size,
-                 it == metas_vec.end());
+    spdlog::info("load size: 0x{:x}:0x{:x}, read done: {}", loaded_size,
+                 buffer_size, it == metas_vec.end());
     CUDA_CHECK(cudaMemcpyAsync(buffer_ptr, host_weight_segment + start_offset,
                                loaded_size, cudaMemcpyHostToDevice, 0));
     CUDA_CHECK(cudaStreamSynchronize(0));

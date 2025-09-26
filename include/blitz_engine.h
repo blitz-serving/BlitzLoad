@@ -16,7 +16,7 @@ public:
   BlitzEngine(std::vector<int> buf_devices, size_t buf_size);
   ~BlitzEngine();
 
-  std::pair<std::string, int> ssd_to_mem(std::vector<std::string> files);
+  int pull_model(std::string model_name_or_path);
   void mem_to_tensor(cudaIpcMemHandle_t &handle, std::string tensor_name,
                      size_t tensor_size, int tensor_device);
 
@@ -30,9 +30,6 @@ public:
 private:
   std::vector<std::thread> threads;
   std::vector<int> buf_devices;
-  std::vector<std::unique_ptr<std::mutex>> mtxs;
-  std::vector<int> is_empty;
-  std::vector<std::unique_ptr<std::condition_variable>> cvs;
   std::vector<std::unique_ptr<buffer::BufferGroup>> buf_groups;
   cudaStream_t buf2tensor_stream;
 

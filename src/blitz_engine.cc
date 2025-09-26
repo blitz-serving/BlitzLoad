@@ -3,6 +3,7 @@
 #include "spdlog/spdlog.h"
 #include <algorithm>
 #include <blitz_engine.h>
+#include <common_tools.hpp>
 #include <condition_variable>
 #include <cstddef>
 #include <filesystem>
@@ -32,15 +33,6 @@ BlitzEngine::BlitzEngine(std::vector<int> buf_devices_, size_t buf_size) {
     device_iter++;
   }
   this->enable_p2p_access(buf_devices_);
-  for (size_t i = 0; i < buf_devices_.size(); i++) {
-    is_empty.push_back(true);
-    mtxs.push_back(std::make_unique<std::mutex>());
-    cvs.push_back(std::make_unique<std::condition_variable>());
-  }
-  spdlog::info("length: mtx: {}, cv: {}, is_empty: {}", mtxs.size(), cvs.size(),
-               is_empty.size());
-  auto test = cvs[0].get();
-  test->notify_one();
 }
 
 void BlitzEngine::enable_p2p_access(std::vector<int> devices) {
@@ -76,10 +68,6 @@ void BlitzEngine::buffer_to_tensor(cudaIpcMemHandle_t &handle,
              "Hasn't access p2p");
   auto status =
       buf_groups[rank]->buffer_to_tensor(handle, tensor_size, tensor_device);
-  if (status == buffer::EMPTY) {
-    is_empty[rank] = 1;
-    cvs[rank]->notify_one();
-  }
 }
 
 size_t BlitzEngine::export_handler(cudaIpcMemHandle_t *handle, size_t *offset,
@@ -92,18 +80,18 @@ void BlitzEngine::free_handler(size_t tensor_size, int rank) {
 }
 
 void BlitzEngine::mem_to_buffer(std::string model_path, int rank_num) {
+  spdlog::info("Trigger mem2buf");
   for (int _rank = 0; _rank < rank_num; _rank++) {
     threads.emplace_back(std::thread([this, _rank, model_path]() {
       while (true) {
+        LOG_ASSERT(this->buf_groups[_rank] != nullptr,
+                   "BufGroup is null, cur rank: {}, group size: {}", _rank,
+                   this->buf_groups.size());
         auto status = this->buf_groups[_rank]->mem_to_buffer(
             *(dangertensor_map[model_path][_rank]));
         if (status == buffer::END) {
           spdlog::info("Buffers[{}] load done", _rank);
           break;
-        }
-        if (status == buffer::READY || status == buffer::END ||
-            status == buffer::LOADED) {
-          is_empty[_rank] = 0;
         }
         std::this_thread::yield();
       }
@@ -111,34 +99,40 @@ void BlitzEngine::mem_to_buffer(std::string model_path, int rank_num) {
   }
 }
 
-std::pair<std::string, int>
-BlitzEngine::ssd_to_mem(std::vector<std::string> bin_files) {
-  std::string model_path = "";
-  for (auto bin_file : bin_files) {
-    auto meta_file = bin_file;
-    size_t pos = meta_file.rfind('.');
-    if (pos != std::string::npos) {
-      meta_file.replace(pos + 1, meta_file.size() - pos - 1, "meta");
+int BlitzEngine::pull_model(std::string model_name_or_path) {
+  spdlog::info("Want to load model: {}", model_name_or_path);
+  std::regex pattern(R"(dangertensors\.(\d+)\.bin)");
+  int rank_num = 0;
+  try {
+    for (const auto &entry : fs::directory_iterator(model_name_or_path)) {
+      if (entry.is_regular_file()) {
+        std::string filename = entry.path().filename().string();
+        if (std::regex_match(filename, pattern)) {
+          rank_num++;
+          // find rank
+          std::smatch match;
+          std::regex_match(filename, match, pattern);
+          int rank = std::stoi(match[1].str());
+          spdlog::info("Match file {}, rank is {}", filename, rank);
+          dangertensor_map[model_name_or_path][rank] =
+              std::make_unique<dangertensor::DangerTensor>();
+
+          // load files
+          auto bin_file = entry.path().string();
+          auto meta_file = bin_file;
+          auto pos = meta_file.rfind('.');
+          meta_file.replace(pos + 1, meta_file.size() - pos - 1, "meta");
+          auto danger_tensor = dangertensor_map[model_name_or_path][rank].get();
+          danger_tensor->load_meta_from_ssd(meta_file);
+          danger_tensor->load_data_from_ssd(bin_file);
+        }
+      }
     }
-    spdlog::info("Current bin_file: {}, meta_file: {}", bin_file, meta_file);
-    std::regex pattern(R"(dangertensors\.(\d+)\.bin)");
-    std::smatch match;
-    fs::path p(bin_file);
-    auto filename = p.filename().string();
-    model_path = p.parent_path().string();
-    if (std::regex_match(filename, match, pattern)) {
-      int rank = std::stoi(match[1].str());
-      spdlog::info("Match file {}, meta file is {}, rank is {}", bin_file,
-                   meta_file, rank);
-      dangertensor_map[model_path][rank] =
-          std::make_unique<dangertensor::DangerTensor>();
-      auto danger_tensor = dangertensor_map[model_path][rank].get();
-      danger_tensor->load_meta_from_ssd(meta_file);
-      danger_tensor->load_data_from_ssd(bin_file);
-    }
+  } catch (const std::exception &e) {
+    spdlog::error("Error: {}", e.what());
   }
   spdlog::info("Load done");
-  return {model_path, bin_files.size()};
+  return rank_num;
 }
 
 BlitzEngine::~BlitzEngine() {
