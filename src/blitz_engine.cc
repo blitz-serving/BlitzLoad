@@ -3,10 +3,12 @@
 #include "spdlog/spdlog.h"
 #include <algorithm>
 #include <blitz_engine.h>
+#include <common_tools.hpp>
 #include <condition_variable>
 #include <cstddef>
 #include <filesystem>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <regex>
@@ -32,15 +34,6 @@ BlitzEngine::BlitzEngine(std::vector<int> buf_devices_, size_t buf_size) {
     device_iter++;
   }
   this->enable_p2p_access(buf_devices_);
-  for (size_t i = 0; i < buf_devices_.size(); i++) {
-    is_empty.push_back(true);
-    mtxs.push_back(std::make_unique<std::mutex>());
-    cvs.push_back(std::make_unique<std::condition_variable>());
-  }
-  spdlog::info("length: mtx: {}, cv: {}, is_empty: {}", mtxs.size(), cvs.size(),
-               is_empty.size());
-  auto test = cvs[0].get();
-  test->notify_one();
 }
 
 void BlitzEngine::enable_p2p_access(std::vector<int> devices) {
@@ -57,59 +50,44 @@ void BlitzEngine::enable_p2p_access(std::vector<int> devices) {
   }
 }
 
+/// deprecated
 void BlitzEngine::mem_to_tensor(cudaIpcMemHandle_t &handle,
                                 std::string tensor_name, size_t tensor_size,
                                 int tensor_device) {
-  // FIXME: hardcode
-  LOG_ASSERT(dangertensor_map.find(0) != dangertensor_map.end(),
-             "Hasn't inited dangertensor[0]");
-  dangertensor_map[0]->mem_to_tensor(handle, tensor_name, tensor_size,
-                                     tensor_device);
+  LOG_ASSERT(false, "deprecated method");
 }
 
-// FIXME: suppose engine only loads one model
 void BlitzEngine::buffer_to_tensor(cudaIpcMemHandle_t &handle,
                                    int tensor_device, size_t tensor_size,
-                                   int shard_id) {
+                                   int rank) {
   LOG_ASSERT(std::find(buf_devices.begin(), buf_devices.end(), tensor_device) !=
                  buf_devices.end(),
              "Hasn't access p2p");
-  auto status = buf_groups[shard_id]->buffer_to_tensor(handle, tensor_size,
-                                                       tensor_device);
-  if (status == buffer::EMPTY) {
-    is_empty[shard_id] = 1;
-    cvs[shard_id]->notify_one();
-  }
+  auto status =
+      buf_groups[rank]->buffer_to_tensor(handle, tensor_size, tensor_device);
 }
 
 size_t BlitzEngine::export_handler(cudaIpcMemHandle_t *handle, size_t *offset,
-                                   size_t tensor_size, int shard_id) {
-  return buf_groups[shard_id]->export_handler(handle, offset, tensor_size);
+                                   size_t tensor_size, int rank) {
+  return buf_groups[rank]->export_handler(handle, offset, tensor_size);
 }
 
-void BlitzEngine::free_handler(size_t tensor_size, int shard_id) {
-  buf_groups[shard_id]->free_handler(tensor_size);
+void BlitzEngine::free_handler(size_t tensor_size, int rank) {
+  buf_groups[rank]->free_handler(tensor_size);
 }
 
-void BlitzEngine::mem_to_buffer(int shard_num) {
-  for (int shard_id = 0; shard_id < shard_num; shard_id++) {
-    threads.emplace_back(std::thread([this, shard_id]() {
-      // auto cv = cvs[shard_id].get();
+void BlitzEngine::mem_to_buffer(std::string danger_tensor_index_name,
+                                int rank_num) {
+  spdlog::info("Trigger mem2buf, dangertensor index {}, ranks {}",
+               danger_tensor_index_name, rank_num);
+  for (int _rank = 0; _rank < rank_num; _rank++) {
+    threads.emplace_back(std::thread([this, _rank, danger_tensor_index_name]() {
       while (true) {
-        // std::unique_lock<std::mutex> lock(*mtxs[shard_id]);
-        // spdlog::info("{} is Waiting", shard_id);
-        // cv->wait(lock,
-        //  [this, shard_id] { return this->is_empty[shard_id] == 1; });
-        // spdlog::info("{} is wait done", shard_id);
-        auto status = this->buf_groups[shard_id]->mem_to_buffer(
-            *dangertensor_map[shard_id]);
+        auto status = this->buf_groups[_rank]->mem_to_buffer(
+            *(dangertensor_map[danger_tensor_index_name][_rank]));
         if (status == buffer::END) {
-          spdlog::info("Buffers[{}] load done", shard_id);
+          spdlog::info("Buffers[{}] load done", _rank);
           break;
-        }
-        if (status == buffer::READY || status == buffer::END ||
-            status == buffer::LOADED) {
-          is_empty[shard_id] = 0;
         }
         std::this_thread::yield();
       }
@@ -117,31 +95,64 @@ void BlitzEngine::mem_to_buffer(int shard_num) {
   }
 }
 
-int BlitzEngine::ssd_to_mem(std::vector<std::string> bin_files) {
-  for (auto bin_file : bin_files) {
-    auto meta_file = bin_file;
-    size_t pos = meta_file.rfind('.');
-    if (pos != std::string::npos) {
-      meta_file.replace(pos + 1, meta_file.size() - pos - 1, "meta");
+void BlitzEngine::reset_status(int rank) {
+  spdlog::info("Reset buffers status on rank {}", rank);
+  this->buf_groups[rank]->reset_status();
+}
+
+int BlitzEngine::pull_model(std::string model_name_or_path, int tp_size,
+                            int pp_size) {
+  spdlog::info("Want to load model: {}", model_name_or_path);
+  std::regex pattern(R"(dangertensors\.(\d+)\.bin)");
+  int rank_num = 0;
+  auto rank_file_map = std::map<int, std::string>();
+  auto danger_tensor_index_name =
+      gen_dangertensor_index_name(model_name_or_path, tp_size, pp_size);
+  try {
+    for (const auto &entry : fs::directory_iterator(model_name_or_path)) {
+      if (entry.is_regular_file()) {
+        std::string filename = entry.path().filename().string();
+        if (std::regex_match(filename, pattern)) {
+          rank_num++;
+          // find rank
+          std::smatch match;
+          std::regex_match(filename, match, pattern);
+          int rank = std::stoi(match[1].str());
+          spdlog::info("Match file {}, rank is {}", filename, rank);
+          rank_file_map[rank] = entry.path().string();
+          if (dangertensor_map.find(danger_tensor_index_name) ==
+                  dangertensor_map.end() ||
+              dangertensor_map[danger_tensor_index_name].find(rank) ==
+                  dangertensor_map[danger_tensor_index_name].end()) {
+            // cannot find danger_tensor
+            spdlog::info("Create dangertensor {}, rank {}",
+                         danger_tensor_index_name, rank);
+            dangertensor_map[danger_tensor_index_name][rank] =
+                std::make_unique<dangertensor::DangerTensor>();
+          } else {
+            spdlog::debug("DangerTensor {}:{} existed",
+                          danger_tensor_index_name, rank);
+          }
+        }
+      }
     }
-    spdlog::info("Current bin_file: {}, meta_file: {}", bin_file, meta_file);
-    std::regex pattern(R"(dangertensors\.(\d+)\.bin)");
-    std::smatch match;
-    fs::path p(bin_file);
-    auto filename = p.filename().string();
-    if (std::regex_match(filename, match, pattern)) {
-      int shard_id = std::stoi(match[1].str());
-      spdlog::info("Match file {}, meta file is {}, shard_id is {}", bin_file,
-                   meta_file, shard_id);
-      dangertensor_map[shard_id] =
-          std::make_unique<dangertensor::DangerTensor>();
-      auto danger_tensor = dangertensor_map[shard_id].get();
+    for (auto [rank, entry_name] : rank_file_map) {
+      // load files
+      auto bin_file = entry_name;
+      auto meta_file = bin_file;
+      auto pos = meta_file.rfind('.');
+      meta_file.replace(pos + 1, meta_file.size() - pos - 1, "meta");
+      auto danger_tensor =
+          dangertensor_map[danger_tensor_index_name][rank].get();
       danger_tensor->load_meta_from_ssd(meta_file);
       danger_tensor->load_data_from_ssd(bin_file);
+      spdlog::info("{} load done", bin_file);
     }
+  } catch (const std::exception &e) {
+    spdlog::error("Error: {}", e.what());
   }
   spdlog::info("Load done");
-  return bin_files.size();
+  return rank_num;
 }
 
 BlitzEngine::~BlitzEngine() {

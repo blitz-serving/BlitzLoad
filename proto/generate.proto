@@ -19,6 +19,7 @@ service ParamService {
 message GetHandlerRequest{
     required string tensor_name = 1;
     required uint64 tensor_size = 2;
+    required int32 rank = 3;
 }
 
 message GetHandlerResponse {
@@ -30,6 +31,7 @@ message GetHandlerResponse {
 message RevertHandlerRequest{
     required string tensor_name = 1;
     required uint64 tensor_size = 2;
+    required int32 rank = 3;
 }
 
 message RevertHandlerResponse {}
@@ -37,6 +39,7 @@ message RevertHandlerResponse {}
 message PullModelRequest {
     // model name or path
     required string model_name = 1;
+    required int32 world_size = 2;
 }
 message PullModelResponse {
     required string task_id = 1;
@@ -50,6 +53,8 @@ message CheckModelResponse {
     required bool done = 1;
 }
 
+
+// deprecated
 message LoadWeightRequest{
     required bytes ipc_handle = 1;
     required uint64 tensor_size = 2;

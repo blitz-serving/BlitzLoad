@@ -5,3 +5,9 @@
 	path = third_party/spdlog
 	url = https://github.com/gabime/spdlog.git
 	branch = v1.15.3
+[submodule "third_party/cppzmq"]
+	path = third_party/cppzmq
+	url = https://github.com/zeromq/cppzmq.git
+[submodule "third_party/json"]
+	path = third_party/json
+	url = https://github.com/nlohmann/json.git

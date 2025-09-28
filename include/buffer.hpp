@@ -44,16 +44,16 @@ inline std::string to_string(blitz::buffer::Status s) {
 // HBM buffer
 class Buffer {
 public:
-  Buffer(size_t buf_size, cudaStream_t *buf2tensor_stream, int device = 0)
-      : buffer_size(buf_size) {
+  Buffer(size_t buf_size, cudaStream_t *buf2tensor_stream, int idx,
+         int device = 0)
+      : buffer_size(buf_size), buffer_idx(idx) {
     cudaSetDevice(device);
     this->device = device;
     CUDA_CHECK(cudaMalloc(&buffer_ptr, buffer_size));
     this->buf2tensor_stream = *buf2tensor_stream;
     cudaPointerAttributes attr;
     cudaError_t err = cudaPointerGetAttributes(&attr, buffer_ptr);
-    spdlog::info("Buffer on device({})'s ptr on device({})", device,
-                 attr.device);
+    spdlog::info("[Buffer {}:{}] Init", device, buffer_idx);
   }
 
   Status mem_to_buffer(dangertensor::DangerTensor &source,
@@ -62,8 +62,8 @@ public:
       return status;
     }
     status = LOADING;
-    auto [new_loaded_size, ended] =
-        source.mem_to_buffer(buffer_ptr, buffer_size, buffer_group_read_size);
+    auto [new_loaded_size, ended] = source.mem_to_buffer(
+        buffer_ptr, buffer_size, buffer_group_read_size, buffer_idx, device);
     this->local_usable_size += new_loaded_size;
     this->local_used_size = 0;
     buffer_group_read_size += new_loaded_size;
@@ -71,18 +71,14 @@ public:
     status = READY;
     cv.notify_all();
     spdlog::info(
-        "Buffer on device({}) new load bytes: 0x{:X}, cur usable size: 0x{:x} ",
-        device, new_loaded_size, local_usable_size.load());
+        "[Buffer {}:{}] new load bytes: 0x{:X}, cur usable size: 0x{:x} ",
+        device, buffer_idx, new_loaded_size, local_usable_size.load());
     return ended ? END // end: means dangertensor file has been all read
                  : READY;
   }
 
   std::pair<size_t, bool> export_handler(cudaIpcMemHandle_t *handle,
                                          size_t *offset, size_t tensor_size) {
-    // LOG_ASSERT(status == READY || status == LOADED,
-    //            "Hasn't loaded data, cannot load to tensor, "
-    //            "current status: {}",
-    //            to_string(status));
     std::unique_lock<std::mutex> guard(cv_mtx);
     cv.wait(guard,
             [this] { return this->status == READY || this->status == LOADED; });
@@ -91,24 +87,19 @@ public:
     if (tensor_size > buffer_size) {
       load_tensor_size = buffer_size;
     }
-    LOG_ASSERT(local_usable_size >= planned_used_size + load_tensor_size,
-               "usable size 0x{:x} < used 0x{:x} + tensor size 0x{:x}",
-               local_usable_size.load(), planned_used_size.load(),
-               load_tensor_size);
+    LOG_ASSERT(
+        local_usable_size >= planned_used_size + load_tensor_size,
+        "[Buffer {}:{}] usable size 0x{:x} < used 0x{:x} + tensor size 0x{:x}",
+        device, buffer_idx, local_usable_size.load(), planned_used_size.load(),
+        load_tensor_size);
     __nv_bfloat16 *val =
         (__nv_bfloat16 *)((char *)buffer_ptr + planned_used_size);
     std::vector<__nv_bfloat16> vals(3);
     CUDA_CHECK(cudaMemcpy(vals.data(), (char *)buffer_ptr + planned_used_size,
                           sizeof(__nv_bfloat16) * 3, cudaMemcpyDeviceToHost));
-    spdlog::info("Export Values: [{}, {}, {}]", __bfloat162float(vals[0]),
-                 __bfloat162float(vals[1]), __bfloat162float(vals[2]));
     CUDA_CHECK(cudaIpcGetMemHandle(handle, buffer_ptr));
     *offset = planned_used_size.load();
-    spdlog::info("Export tensor size: {}", load_tensor_size);
     planned_used_size += load_tensor_size;
-    // spdlog::info("Export handler, length {}, planned:usable {}:{}",
-    //              load_tensor_size, planned_used_size.load(),
-    //              local_usable_size.load());
     if (planned_used_size == local_usable_size) {
       // cannot be written, only free handler can use this buffer now
       status = PLANNED_EMPTY;
@@ -122,8 +113,8 @@ public:
     if (local_used_size == local_usable_size) {
       // all tensors have been copied to python
       LOG_ASSERT(status == PLANNED_EMPTY,
-                 "Buffer status should be planned_emtpy, not {}",
-                 to_string(status));
+                 "[Buffer {}:{}] status should be planned_emtpy, not {}",
+                 device, buffer_idx, to_string(status));
       local_usable_size = 0;
       local_used_size = 0;
       planned_used_size = 0;
@@ -132,47 +123,23 @@ public:
     return status;
   }
 
+  void reset_status() {
+    local_usable_size = 0;
+    local_used_size = 0;
+    planned_used_size = 0;
+    status = EMPTY;
+  }
+
   /// deprecated
   Status buffer_to_tensor(cudaIpcMemHandle_t &handle, size_t tensor_size,
                           int tensor_device) {
-    cudaSetDevice(device);
-    spdlog::info("Buffer to tensor, tensor device: {}", tensor_device);
-    LOG_ASSERT(status == READY || status == LOADED,
-               "Hasn't loaded data, cannot load to tensor on device {}, "
-               "current status: {}",
-               tensor_device, to_string(status));
-    status = LOADED;
-    void *tensor_ptr = nullptr;
-    cudaIpcOpenMemHandle(&tensor_ptr, handle, cudaIpcMemLazyEnablePeerAccess);
-    cudaPointerAttributes attr;
-    cudaError_t err = cudaPointerGetAttributes(&attr, tensor_ptr);
-    spdlog::info("Buffer get pointer on device({})", attr.device);
-    if (tensor_device == device) {
-      CUDA_CHECK(cudaMemcpyAsync(
-          tensor_ptr, (char *)buffer_ptr + local_used_size, tensor_size,
-          cudaMemcpyDeviceToDevice, buf2tensor_stream));
-      CUDA_CHECK(cudaStreamSynchronize(buf2tensor_stream));
-    } else {
-      cudaMemcpyPeerAsync(tensor_ptr, tensor_device,
-                          (char *)buffer_ptr + local_used_size, device,
-                          tensor_size, buf2tensor_stream);
-    }
-    local_used_size += tensor_size;
-    if (local_usable_size <= local_used_size) {
-      LOG_ASSERT(
-          local_usable_size == local_used_size,
-          "usable size ({}) < used size ({}), there's some inconsistency",
-          local_usable_size.load(), local_used_size.load());
-      cudaStreamSynchronize(buf2tensor_stream);
-      status = EMPTY;
-    }
-    spdlog::info("Buffer on device({}), used size: {}, status: {}", device,
-                 local_used_size.load(), to_string(status.load()));
+    LOG_ASSERT(false, "Deprecated method");
     return this->status.load();
   }
 
 private:
   int device = -1;
+  int buffer_idx = 0;
   void *buffer_ptr;
   const size_t buffer_size;
   std::atomic<Status> status = EMPTY;
@@ -196,8 +163,8 @@ public:
     release_idx = 0;
     buffer_group_read_size = 0;
     for (int i = 0; i < group_size; i++) {
-      buffers.emplace_back(
-          std::make_unique<Buffer>(single_buf_size, buf2tensor_stream, device));
+      buffers.emplace_back(std::make_unique<Buffer>(
+          single_buf_size, buf2tensor_stream, i, device));
       is_empty.emplace_back(1);
     }
   }
@@ -206,9 +173,12 @@ public:
     std::lock_guard<std::mutex> guard(mutexs[write_idx]);
     auto status =
         buffers[write_idx]->mem_to_buffer(source, buffer_group_read_size);
-    if (status != EMPTY && status != END) {
+    if (status == READY) {
       write_idx = (write_idx + 1) % group_size;
     }
+    // if (status != READY && status != END) {
+    //   write_idx = (write_idx + 1) % group_size;
+    // }
     return status;
   }
 
@@ -224,10 +194,26 @@ public:
   }
 
   void free_handler(size_t tensor_size) {
-    std::lock_guard<std::mutex> guard(mutexs[read_idx]);
+    std::lock_guard<std::mutex> guard(mutexs[release_idx]);
     auto status = buffers[release_idx]->free_handler(tensor_size);
     if (status == EMPTY) {
       release_idx = (release_idx + 1) % group_size;
+    }
+  }
+
+  void reset_status() {
+    for (int i = 0; i < group_size; i++) {
+      mutexs[i].lock();
+    }
+    read_idx = 0;
+    write_idx = 0;
+    release_idx = 0;
+    buffer_group_read_size = 0;
+    for (std::unique_ptr<Buffer> &buf_ptr : buffers) {
+      buf_ptr->reset_status();
+    }
+    for (int i = group_size - 1; i >= 0; i--) {
+      mutexs[i].unlock();
     }
   }
 

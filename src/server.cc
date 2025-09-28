@@ -76,12 +76,13 @@ public:
     } catch (const std::exception &e) {
       spdlog::error("Error: {}", e.what());
     }
+    std::string model_name = req->model_name();
     std::string data = req->model_name() + std::to_string(time(nullptr));
     auto id = sha256(data);
     task_map[id] = false;
-    std::thread([this, bin_files, id] {
-      engine_ptr->ssd_to_mem(bin_files);
-      engine_ptr->mem_to_buffer(bin_files.size());
+    std::thread([this, bin_files, id, model_name] {
+      auto rank_num = engine_ptr->pull_model(model_name);
+      engine_ptr->mem_to_buffer(model_name, rank_num);
       task_map[id] = true;
     }).detach();
     resp->set_task_id(id);
@@ -94,7 +95,7 @@ public:
                     CheckModelResponse *resp) override {
     auto res = task_map[req->task_id()];
     resp->set_done(res);
-    spdlog::info("Model loaded? {}, task_id {}", res, req->task_id());
+    // spdlog::info("Model loaded? {}, task_id {}", res, req->task_id());
 
     return Status::OK;
   }
@@ -123,8 +124,9 @@ public:
     cudaIpcMemHandle_t handle;
     size_t offset = 0;
     // FIXME: hard code shard_id = 0
+    auto rank_ = req->rank();
     auto loaded_size =
-        engine_ptr->export_handler(&handle, &offset, req->tensor_size(), 0);
+        engine_ptr->export_handler(&handle, &offset, req->tensor_size(), rank_);
     resp->set_ipc_handler(reinterpret_cast<const char *>(&handle),
                           sizeof(handle));
     resp->set_offset(offset);
@@ -143,7 +145,8 @@ public:
   Status RevertHandler(ServerContext *ctx, const RevertHandlerRequest *req,
                        RevertHandlerResponse *resp) override {
     auto start = std::chrono::steady_clock::now();
-    engine_ptr->free_handler(req->tensor_size(), 0);
+    auto rank_ = req->rank();
+    engine_ptr->free_handler(req->tensor_size(), rank_);
     auto end = std::chrono::steady_clock::now();
     auto elapse_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
@@ -197,7 +200,7 @@ static void RunServer(const std::string &addr) {
 
 int main(int argc, char **argv) {
   UnsetProxyEnv();
-  std::string addr = "0.0.0.0:60060";
+  std::string addr = "unix:///tmp/grpc.sock";
   if (argc >= 2) {
     addr = argv[1];
   }

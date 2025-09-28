@@ -47,6 +47,9 @@ public:
 
   /// read meta file to mock remote transfer
   void load_meta_from_ssd(std::string danger_meta_path) {
+    if (valid) {
+      return;
+    }
     std::fstream f(danger_meta_path, std::ios::in);
     f >> tensor_num;
     metas_vec.resize(tensor_num);
@@ -64,6 +67,9 @@ public:
 
   /// mmap binfile to mock remote weight source
   void load_data_from_ssd(std::string danger_bin_path) {
+    if (valid) {
+      return;
+    }
     file_read_mtx.lock();
     int fd = open(danger_bin_path.c_str(), O_DIRECT | O_RDONLY);
     if (fd == -1) {
@@ -73,19 +79,20 @@ public:
     fstat(fd, &st);
     const size_t file_size = st.st_size;
     CUDA_CHECK(cudaMallocHost(&host_weight_segment, file_size));
-    spdlog::info("Data file size: {}bytes, host weight segment: {:#x}",
+    spdlog::info("Data file size: {}bytes, host weight segment: {:x}",
                  file_size, host_weight_segment);
 
     auto start = std::chrono::high_resolution_clock::now();
 
     std::vector<std::future<int>> as;
+    size_t total_chunks =
+        (file_size + chunk_size_in_bytes - 1) / chunk_size_in_bytes;
+    size_t chunk_per_thrd = (total_chunks + nthreads - 1) / nthreads;
     for (size_t i = 0; i < nthreads; ++i) {
-      size_t total_chunks =
-          (file_size + chunk_size_in_bytes - 1) / chunk_size_in_bytes;
-      size_t chunk_per_thrd = (i < nthreads - 1)
-                                  ? (total_chunks + nthreads - 1) / nthreads
-                                  : total_chunks / nthreads;
       size_t partition_offset = i * chunk_per_thrd * chunk_size_in_bytes;
+      if (i == nthreads - 1) {
+        chunk_per_thrd = total_chunks - (nthreads - 2) * chunk_per_thrd;
+      }
 
       as.emplace_back(
           std::async(std::launch::async, [this, file_size, fd, chunk_per_thrd,
@@ -131,7 +138,8 @@ public:
   }
 
   std::pair<size_t, bool> mem_to_buffer(void *buffer_ptr, size_t buffer_size,
-                                        size_t buffer_read_size) {
+                                        size_t buffer_read_size, int buffer_idx,
+                                        int device) {
     LOG_ASSERT(valid, "File hasn't been loaded");
     auto it = std::upper_bound(
         metas_vec.begin(), metas_vec.end(), buffer_read_size,
@@ -148,22 +156,26 @@ public:
           (__nv_bfloat16 *)(host_weight_segment + start_offset + loaded_size);
       loaded_size += ls;
       first_tensor_offset = 0;
-      spdlog::info("Loading {}, values: [{}, {}, {}]", it->name,
-                   __bfloat162float(*val), __bfloat162float(*(val + 1)),
-                   __bfloat162float(*(val + 2)));
+      spdlog::info("[Buffer {}:{}] Loading {}, values: [{}, {}, {}]", device,
+                   buffer_idx, it->name, __bfloat162float(*val),
+                   __bfloat162float(*(val + 1)), __bfloat162float(*(val + 2)));
       it++;
     }
     if (it != metas_vec.end() && loaded_size == 0 &&
         it->data_length > buffer_size) {
       // single tensor size > buffer size, truncate
-      spdlog::info("Should truncate tensor {}", it->name);
+      __nv_bfloat16 *val =
+          (__nv_bfloat16 *)(host_weight_segment + start_offset);
+      spdlog::info("[Buffer {}:{}] loading partial {}, should truncate, "
+                   "values: [{}, {}, {}]",
+                   device, buffer_idx, it->name, __bfloat162float(*val),
+                   __bfloat162float(*(val + 1)), __bfloat162float(*(val + 2)));
       loaded_size = buffer_size;
     }
-    spdlog::info("load size: {}:{}, read done: {}", loaded_size, buffer_size,
-                 it == metas_vec.end());
+    // spdlog::info("load size: 0x{:x}:0x{:x}, read done: {}", loaded_size,
+    //              buffer_size, it == metas_vec.end());
     CUDA_CHECK(cudaMemcpyAsync(buffer_ptr, host_weight_segment + start_offset,
                                loaded_size, cudaMemcpyHostToDevice, 0));
-    CUDA_CHECK(cudaStreamSynchronize(0));
     return {loaded_size, it == metas_vec.end()};
   }
 

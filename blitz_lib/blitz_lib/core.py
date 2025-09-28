@@ -4,18 +4,39 @@ import ctypes
 import time
 import cProfile, pstats, io
 
+import json
 import functools
 import inspect
+import zmq
 from . import generate_pb2
 from . import generate_pb2_grpc
+from . import mq_types
 from grpc_health.v1 import health_pb2, health_pb2_grpc
 
 import os
 from threading import Lock
 
-_grpc_clients: dict[str, dict] = {}
-_grpc_clients_lock = Lock()
+
+class MqInfo:
+    def __init__(self, context, port_dict):
+        self.context = context
+        self.port_dict = port_dict
+
+
+_zmq_sockets: dict[int, MqInfo] = {}
+_zmq_clients_lock = Lock()
+
+_rank_info: dict[str, int] = {}  # proc_id: rank
 profiler = cProfile.Profile()
+# context = zmq.Context()
+
+server_addr_map = {
+    "pull_model": "tcp://localhost:55555",
+    "check_model": "tcp://localhost:55556",
+    "load_param": "tcp://localhost:55557",
+    "revert_handler": "tcp://localhost:55558",
+    "reset_status": "tcp://localhost:55559",
+}
 
 # 需要清除的代理环境变量列表
 proxy_vars = [
@@ -29,7 +50,6 @@ proxy_vars = [
     "no_proxy",
 ]
 
-# 删除它们
 for var in proxy_vars:
     if var in os.environ:
         del os.environ[var]
@@ -57,7 +77,6 @@ def health_check(channel) -> bool:
             return False
     except Exception as e:
         return False
-        # raise RuntimeError(f"Failed to run health check: {e}")
 
 
 def register_fork_handler(channel):
@@ -67,6 +86,12 @@ def register_fork_handler(channel):
         print("Child process: gRPC resources destroyed")
 
     os.register_at_fork(after_in_child=_fork_post_child)
+
+
+def register_rank(rank: int):
+    proc_id = os.getpid()
+    _rank_info[proc_id] = rank
+    print(f"Proc {proc_id}'s rank is {rank}")
 
 
 class CudaMemManager:
@@ -103,6 +128,8 @@ class CudaMemManager:
             raise MemoryError("Tensor should be contiguous")
         tensor_ptr = tensor.data_ptr() + tensor_offset
 
+        # print(f"Tensor ptr {tensor_ptr}, device ptr {device_ptr}, size {size}")
+
         rt.memcpy(tensor_ptr, device_ptr, size, rt.memcpyDeviceToDevice)
 
 
@@ -110,152 +137,88 @@ class cudaIpcMemHandle(ctypes.Structure):
     _fields_ = [("reserved", ctypes.c_char * CUDA_IPC_HANDLE_SIZE)]
 
 
-# _channel = None
-# _stub = None
-# _grpc_metas = {}
 cuda_mem_manager = CudaMemManager()
 
 
-def _get_stub(server_addr: str, refresh_stub: bool = False):
-    global _grpc_clients
-
+def _get_socket(server_addr: str, refresh_socket: bool = False):
+    global _zmq_sockets
     current_pid = os.getpid()
 
-    with _grpc_clients_lock:
-        if current_pid not in _grpc_clients:
-            _grpc_clients[current_pid] = {
-                "checked": False,
-                "channel": None,
-                "stub": None,
-            }
+    with _zmq_clients_lock:
+        if current_pid not in _zmq_sockets:
+            _zmq_sockets[current_pid] = MqInfo(context=zmq.Context(), port_dict={})
 
-        client_info = _grpc_clients[current_pid]
+        cli_info = _zmq_sockets[current_pid]
 
-        if (
-            client_info["checked"] != True
-            or refresh_stub
-            or client_info["stub"] is None
-        ):
-            print(f"[PID {current_pid}] Creating new stub for {server_addr}")
+        if refresh_socket or server_addr not in cli_info.port_dict:
+            print(f"[PID {current_pid}] Creating new socket for {server_addr}")
+            socket = cli_info.context.socket(zmq.REQ)
+            socket.connect(server_addr)
 
-            channel = grpc.insecure_channel(server_addr)
-            if not health_check(channel):
-                register_fork_handler(channel)
+            cli_info.port_dict[server_addr] = socket
 
-                channel = grpc.insecure_channel(server_addr)
-
-            try:
-                grpc.channel_ready_future(channel).result(timeout=5)
-                print(f"[PID {current_pid}] Connected to {server_addr}")
-            except grpc.FutureTimeoutError:
-                raise RuntimeError(f"Cannot connect to {server_addr}")
-            stub = generate_pb2_grpc.ParamServiceStub(channel)
-
-            client_info["checked"] = True
-            client_info["channel"] = channel
-            client_info["stub"] = stub
-
-    return client_info["stub"]
+    return cli_info.port_dict[server_addr]
 
 
-def load_weight_from_ipc_handle(
-    param: torch.Tensor, weight_name: str, server_addr: str = "localhost:60060"
-) -> None:
-    global LIB_TIME
-    # profiler.enable()
-    start = time.time()
-    stub = _get_stub(server_addr)
+def _send_recv(socket, object):
+    req_json = json.dumps(object.__dict__)
+    socket.send_string(req_json)
+    reply = socket.recv_string()
+    resp_dict = json.loads(reply)
+    return resp_dict
+
+
+def load_tensor(param: torch.Tensor, weight_name: str):
+    loaded_bytes = 0
+    socket_load = _get_socket(server_addr_map["load_param"])
+    socket_revert = _get_socket(server_addr_map["revert_handler"])
+    rank = _rank_info[os.getpid()]
     tensor_size = param.element_size() * param.nelement()
-    req = generate_pb2.GetHandlerRequest(
-        tensor_name=weight_name, tensor_size=tensor_size
-    )
-    try:
-        # start = time.time()
-        res = stub.GetHandler(req, timeout=5.0)
-        # H2D_TIME += time.time()-start
-    except grpc.RpcError as e:
-        print("GetHandler RPC failed:", e.code(), e.details(), flush=True)
-        return
-
-    handle_bytes = res.ipc_handler
-    loaded_bytes = res.loaded_size
-    device_offset = res.offset
-    if len(handle_bytes) != CUDA_IPC_HANDLE_SIZE:
-        raise ValueError(
-            f"Invalid IPC handle size: expected {CUDA_IPC_HANDLE_SIZE}, got {len(handle_bytes)}"
+    while loaded_bytes < tensor_size:
+        req = mq_types.LoadTensorRequest(
+            tensor_name=weight_name, tensor_size=tensor_size - loaded_bytes, rank=rank
         )
-    device_ptr = cuda_mem_manager.cuda_ipc_handle_to_ptr(handle_bytes) + device_offset
-    cuda_mem_manager.copy_device_to_tensor(device_ptr, param, loaded_bytes)
-    req = generate_pb2.RevertHandlerRequest(
-        tensor_name=weight_name, tensor_size=loaded_bytes
+        resp_dict = _send_recv(socket_load, req)
+        resp = mq_types.LoadTensorResponse(
+            resp_dict["handler"], resp_dict["offset"], resp_dict["loaded_size"]
+        )
+        device_ptr = (
+            cuda_mem_manager.cuda_ipc_handle_to_ptr(bytes(resp.handler)) + resp.offset
+        )
+        cuda_mem_manager.copy_device_to_tensor(
+            device_ptr, param, resp.loaded_size, loaded_bytes
+        )
+        loaded_bytes += resp.loaded_size
+
+        req = mq_types.RevertHandlerRequest(weight_name, resp.loaded_size, rank)
+        _send_recv(socket_revert, req)
+
+
+def pull_model(model_name: str, world_size: int, tp_size: int, pp_size: int):
+    global TASK_ID
+    socket = _get_socket(server_addr=server_addr_map["pull_model"])
+    req = mq_types.PullModelRequest(
+        model_name=model_name, world_size=world_size, tp_size=tp_size, pp_size=pp_size
     )
-    stub.RevertHandler(req)
-
-    if loaded_bytes < tensor_size:
-        while loaded_bytes < tensor_size:
-            # print(f"continue loading {weight_name}")
-            req = generate_pb2.GetHandlerRequest(
-                tensor_name=weight_name, tensor_size=tensor_size - loaded_bytes
-            )
-            # start = time.time()
-            res = stub.GetHandler(req)
-            # H2D_TIME += time.time() - start
-            handle_bytes = res.ipc_handler
-            new_loaded_bytes = res.loaded_size
-            device_offset = res.offset
-            if len(handle_bytes) != CUDA_IPC_HANDLE_SIZE:
-                raise ValueError(
-                    f"Invalid IPC handle size: expected {CUDA_IPC_HANDLE_SIZE}, got {len(handle_bytes)}"
-                )
-            device_ptr = (
-                cuda_mem_manager.cuda_ipc_handle_to_ptr(handle_bytes) + device_offset
-            )
-            # cuda_mem_manager.copy_device_to_tensor(
-            #     device_ptr, param[int(loaded_bytes / param.element_size()):], new_loaded_bytes
-            # )
-            cuda_mem_manager.copy_device_to_tensor(
-                device_ptr, param, new_loaded_bytes, loaded_bytes
-            )
-
-            loaded_bytes += new_loaded_bytes
-            # print(f"Current size: {loaded_bytes}")
-            # inform engine that handler can be destroyed
-            req = generate_pb2.RevertHandlerRequest(
-                tensor_name=weight_name, tensor_size=new_loaded_bytes
-            )
-            stub.RevertHandler(req)
-            # print(f"Current H2D time: {H2D_TIME}s")
-    else:
-        pass
-        # print(f"Current H2D time: {H2D_TIME}s")
-        # print(f"tensor {weight_name} load done")
-
-    LIB_TIME += time.time() - start
-    # print(f"Current Lib time: {LIB_TIME}s")
-    # profiler.disable()
-
-
-def pull_model(model_name: str, server_addr: str = "localhost:60060"):
-    global TASK_ID, S2H_TIME
-    stub = _get_stub(server_addr)
-    # S2H_TIME = time.time()
-    req = generate_pb2.PullModelRequest(model_name=model_name)
-    res = stub.PullModel(req)
-    pid = os.getpid()
-    _grpc_clients[pid]["channel"].close()
-    TASK_ID = res.task_id
+    resp_dict = _send_recv(socket, req)
+    TASK_ID = resp_dict["task_id"]
     return TASK_ID
 
 
-def check_model(server_addr="localhost:60060") -> bool:
+def check_model(model_name: str) -> bool:
     # global S2H_TIME
-    stub = _get_stub(server_addr)
-    req = generate_pb2.CheckModelRequest(task_id=TASK_ID)
-    res = stub.CheckModel(req)
-    # if res.done:
-    # S2H_TIME = time.time() - S2H_TIME
-    # print(f"Load model time: {S2H_TIME}, bandwidth: {16 / S2H_TIME}GBps")
-    return res.done
+    socket = _get_socket(server_addr=server_addr_map["check_model"])
+    req = mq_types.CheckModelRequest(model_name=model_name, task_id=TASK_ID)
+    resp_dict = _send_recv(socket, req)
+    return resp_dict["done"]
+
+
+def reset_status():
+    socket = _get_socket(server_addr=server_addr_map["reset_status"])
+    rank = _rank_info[os.getpid()]
+    req = mq_types.ResetStatusRequest(rank=rank)
+    print("Send reset")
+    _send_recv(socket, req)
 
 
 def print_profile():
@@ -294,7 +257,7 @@ def vllm_hook(func):
         name = param_names[1]
         val = bound.arguments[name]
 
-        load_weight_from_ipc_handle(val, bound.arguments[param_names[0]].prefix)
+        load_tensor(val, bound.arguments[param_names[0]].prefix)
         # _dump_tensor(val, bound.arguments[param_names[0]].prefix)
 
     return wrapper
