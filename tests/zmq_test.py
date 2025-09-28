@@ -1,9 +1,8 @@
-import zmq
+
 import json
 import hashlib
 import torch
 import blitz_lib
-from mq_types import *
 
 
 def gen_sha256(model_name):
@@ -21,23 +20,7 @@ def send_recv(socket, object):
 def main():
     blitz_lib.register_rank(0)
     model_path = "/nvme/ly/tmp_files"
-    blitz_lib.pull_model(model_path, 1)
-    # context = zmq.Context()
-    # socket = context.socket(zmq.REQ)
-    # socket.connect("tcp://localhost:55555")
-    # socket2 = context.socket(zmq.REQ)
-    # socket2.connect("tcp://localhost:55556")
-    # socket3 = context.socket(zmq.REQ)
-    # socket3.connect("tcp://localhost:55557")
-    # socket3.connect("tcp://localhost:55558")
-
-    # req = PullModelRequest(model_path, 1)
-    # resp_dict = send_recv(socket, req)
-    # resp = PullModelResponse(resp_dict["task_id"])
-    # task_id = resp.task_id
-
-    # print("Received task_id:", resp.task_id)
-
+    blitz_lib.pull_model(model_path, 1, 1, 1)
     import time
 
     time.sleep(5)

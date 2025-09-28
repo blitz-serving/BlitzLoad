@@ -75,7 +75,8 @@ public:
           auto id = gen_sha256(req.model_name);
           (*task_map)[id] = false;
           std::thread([req, id, this] {
-            int tp_size = 1, pp_size = 1; // FIXME: hard-code
+            int tp_size = req.tp_size,
+                pp_size = req.pp_size; // FIXME: hard-code
             auto rank_num =
                 engine_ptr->pull_model(req.model_name, tp_size, pp_size);
             auto danger_tensor_index_name =

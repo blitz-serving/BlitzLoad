@@ -11,6 +11,8 @@ using nlohmann::json;
 struct PullModelRequest {
   string model_name;
   int32_t world_size;
+  int32_t tp_size;
+  int32_t pp_size;
 };
 
 struct PullModelResponse {
@@ -59,10 +61,15 @@ struct EmptyRequestResponse {};
 inline void from_json(const json &j, PullModelRequest &r) {
   j.at("model_name").get_to(r.model_name);
   j.at("world_size").get_to(r.world_size);
+  j.at("tp_size").get_to(r.tp_size);
+  j.at("pp_size").get_to(r.pp_size);
 }
 
 inline void to_json(json &j, const PullModelRequest &r) {
-  j = json{{"model_name", r.model_name}, {"world_size", r.world_size}};
+  j = json{{"model_name", r.model_name},
+           {"world_size", r.world_size},
+           {"tp_size", r.tp_size},
+           {"pp_size", r.pp_size}};
 }
 
 inline void from_json(const json &j, PullModelResponse &r) {

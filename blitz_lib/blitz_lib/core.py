@@ -127,7 +127,7 @@ class CudaMemManager:
         if not tensor.is_contiguous():
             raise MemoryError("Tensor should be contiguous")
         tensor_ptr = tensor.data_ptr() + tensor_offset
-        
+
         # print(f"Tensor ptr {tensor_ptr}, device ptr {device_ptr}, size {size}")
 
         rt.memcpy(tensor_ptr, device_ptr, size, rt.memcpyDeviceToDevice)
@@ -182,29 +182,36 @@ def load_tensor(param: torch.Tensor, weight_name: str):
         resp = mq_types.LoadTensorResponse(
             resp_dict["handler"], resp_dict["offset"], resp_dict["loaded_size"]
         )
-        device_ptr = cuda_mem_manager.cuda_ipc_handle_to_ptr(bytes(resp.handler)) + resp.offset
-        cuda_mem_manager.copy_device_to_tensor(device_ptr, param, resp.loaded_size, loaded_bytes)
+        device_ptr = (
+            cuda_mem_manager.cuda_ipc_handle_to_ptr(bytes(resp.handler)) + resp.offset
+        )
+        cuda_mem_manager.copy_device_to_tensor(
+            device_ptr, param, resp.loaded_size, loaded_bytes
+        )
         loaded_bytes += resp.loaded_size
 
         req = mq_types.RevertHandlerRequest(weight_name, resp.loaded_size, rank)
         _send_recv(socket_revert, req)
 
 
-def pull_model(model_name: str, world_size: int):
+def pull_model(model_name: str, world_size: int, tp_size: int, pp_size: int):
     global TASK_ID
     socket = _get_socket(server_addr=server_addr_map["pull_model"])
-    req = mq_types.PullModelRequest(model_name=model_name, world_size=world_size)
+    req = mq_types.PullModelRequest(
+        model_name=model_name, world_size=world_size, tp_size=tp_size, pp_size=pp_size
+    )
     resp_dict = _send_recv(socket, req)
     TASK_ID = resp_dict["task_id"]
     return TASK_ID
 
 
-def check_model(model_name:str) -> bool:
+def check_model(model_name: str) -> bool:
     # global S2H_TIME
     socket = _get_socket(server_addr=server_addr_map["check_model"])
     req = mq_types.CheckModelRequest(model_name=model_name, task_id=TASK_ID)
     resp_dict = _send_recv(socket, req)
     return resp_dict["done"]
+
 
 def reset_status():
     socket = _get_socket(server_addr=server_addr_map["reset_status"])
@@ -212,6 +219,7 @@ def reset_status():
     req = mq_types.ResetStatusRequest(rank=rank)
     print("Send reset")
     _send_recv(socket, req)
+
 
 def print_profile():
     pass

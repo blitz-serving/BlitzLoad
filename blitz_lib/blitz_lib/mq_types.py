@@ -1,7 +1,9 @@
 class PullModelRequest:
-    def __init__(self, model_name, world_size):
+    def __init__(self, model_name, world_size, tp_size, pp_size):
         self.model_name = model_name
         self.world_size = world_size
+        self.tp_size = tp_size
+        self.pp_size = pp_size
 class PullModelResponse:
     def __init__(self, task_id):
         self.task_id = task_id
