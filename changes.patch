@@ -1,5 +1,50 @@
+diff --git a/offline_infer.py b/offline_infer.py
+new file mode 100644
+index 000000000..f302b9dd2
+--- /dev/null
++++ b/offline_infer.py
+@@ -0,0 +1,17 @@
++from vllm import LLM, SamplingParams
++
++model_path = "/nvme/ly/tmp_files2"
++prompts = ["haha how are you"]
++sampling_params = SamplingParams(temperature=0, top_p=1, max_tokens=10)
++
++llm = LLM(model=model_path, enforce_eager=True, max_model_len=4096)
++
++outputs = llm.generate(prompts, sampling_params)
++
++for output in outputs:
++    prompt = output.prompt
++    generated_text = output.outputs[0].text
++    tokens = output.outputs[0].token_ids
++    print(
++        f"Prompt: {prompt!r}, Generated text: {generated_text!r}, output tokens: {tokens}"
++    )
+diff --git a/tests/offline_infer.py b/tests/offline_infer.py
+new file mode 100644
+index 000000000..86e5b995e
+--- /dev/null
++++ b/tests/offline_infer.py
+@@ -0,0 +1,15 @@
++from vllm import LLM, SamplingParams
++prompts = [
++    "haha how are you"
++]
++sampling_params = SamplingParams(temperature=0, top_p=1,max_tokens=1)
++
++llm = LLM(model="/nvme/models/Qwen3-8B",enforce_eager=True)
++
++outputs = llm.generate(prompts, sampling_params)
++
++for output in outputs:
++    prompt = output.prompt
++    generated_text = output.outputs[0].text
++    tokens = output.outputs[0].token_ids
++    print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}, output tokens: {tokens}")
+\ No newline at end of file
 diff --git a/vllm/entrypoints/llm.py b/vllm/entrypoints/llm.py
-index 915f14a29..9628ae9f5 100644
+index 915f14a29..50dc79246 100644
 --- a/vllm/entrypoints/llm.py
 +++ b/vllm/entrypoints/llm.py
 @@ -2,6 +2,8 @@
@@ -16,7 +61,7 @@ index 915f14a29..9628ae9f5 100644
  
          log_non_default_args(engine_args)
 -
-+        blitz_lib.pull_model(model)
++        blitz_lib.pull_model(model, tensor_parallel_size * 1, tensor_parallel_size, 1)
          # Create the Engine (autoselects V0 vs V1)
          self.llm_engine = LLMEngine.from_engine_args(
              engine_args=engine_args, usage_context=UsageContext.LLM_CLASS)
@@ -73,7 +118,7 @@ index 75391c51f..212bb6134 100644
          input_dim = getattr(param, "input_dim", None)
          use_bitsandbytes_4bit = getattr(param, "use_bitsandbytes_4bit", False)
 diff --git a/vllm/model_executor/layers/vocab_parallel_embedding.py b/vllm/model_executor/layers/vocab_parallel_embedding.py
-index 9f223998e..b41622e2b 100644
+index 9f223998e..3b483b51f 100644
 --- a/vllm/model_executor/layers/vocab_parallel_embedding.py
 +++ b/vllm/model_executor/layers/vocab_parallel_embedding.py
 @@ -211,6 +211,7 @@ class VocabParallelEmbedding(CustomOp):
@@ -84,7 +129,7 @@ index 9f223998e..b41622e2b 100644
          tp_rank = get_tensor_model_parallel_rank()
          self.tp_size = get_tensor_model_parallel_world_size()
          self.num_embeddings = num_embeddings
-@@ -368,8 +369,11 @@ class VocabParallelEmbedding(CustomOp):
+@@ -368,8 +369,9 @@ class VocabParallelEmbedding(CustomOp):
          # If parameter does not have output dim, then it should
          # be copied onto all gpus (e.g. g_idx for act_order gptq).
          if output_dim is None:
@@ -92,13 +137,11 @@ index 9f223998e..b41622e2b 100644
 -            param.data.copy_(loaded_weight)
 +            import blitz_lib
 +            print("Loading tensor Embedding")
-+            blitz_lib.load_weight_from_ipc_handle(param, self.prefix)
-+            # assert param.data.shape == loaded_weight.shape
-+            # param.data.copy_(loaded_weight)
++            blitz_lib.load_tensor(param, self.prefix)
              return
  
          # Shard indexes for loading the weight
-@@ -386,12 +390,16 @@ class VocabParallelEmbedding(CustomOp):
+@@ -386,12 +388,16 @@ class VocabParallelEmbedding(CustomOp):
              start_idx = start_idx // packed_factor
              shard_size = shard_size // packed_factor
          else:
@@ -112,7 +155,7 @@ index 9f223998e..b41622e2b 100644
 -        param[loaded_weight.shape[0]:].data.fill_(0)
 +        import blitz_lib
 +        print("Tensor embedding")
-+        blitz_lib.load_weight_from_ipc_handle(param, self.prefix)
++        blitz_lib.load_tensor(param, self.prefix)
 +        # loaded_weight = loaded_weight.narrow(output_dim, start_idx, shard_size)
 +        # param[:loaded_weight.shape[0]].data.copy_(loaded_weight)
 +        # param[loaded_weight.shape[0]:].data.fill_(0)
@@ -120,7 +163,7 @@ index 9f223998e..b41622e2b 100644
      def forward(self, input_):
          if self.tp_size > 1:
 diff --git a/vllm/model_executor/model_loader/default_loader.py b/vllm/model_executor/model_loader/default_loader.py
-index 2b8e44275..ddd8a4b87 100644
+index 2b8e44275..cd7dca854 100644
 --- a/vllm/model_executor/model_loader/default_loader.py
 +++ b/vllm/model_executor/model_loader/default_loader.py
 @@ -20,7 +20,7 @@ from vllm.model_executor.model_loader.weight_utils import (
@@ -176,7 +219,7 @@ index 2b8e44275..ddd8a4b87 100644
 +            import blitz_lib
 +            pull_done = False
 +            while not pull_done:
-+                pull_done = blitz_lib.check_model()
++                pull_done = blitz_lib.check_model(source.model_or_path)
 +            weights_iterator = dangertensors_weights_iterator(danger_metas, self.load_config.use_tqdm_on_load)
          else:
              weights_iterator = pt_weights_iterator(
@@ -192,8 +235,17 @@ index 2b8e44275..ddd8a4b87 100644
                  for (name, tensor) in weights_iterator)
  
      def get_all_weights(
+@@ -259,6 +286,8 @@ class DefaultModelLoader(BaseModelLoader):
+         loaded_weights = model.load_weights(
+             self.get_all_weights(model_config, model))
+         self.counter_after_loading_weights = time.perf_counter()
++        import blitz_lib
++        blitz_lib.reset_status()
+         logger.info(
+             "Loading weights took %.2f seconds",
+             self.counter_after_loading_weights -
 diff --git a/vllm/model_executor/model_loader/weight_utils.py b/vllm/model_executor/model_loader/weight_utils.py
-index 78b186265..719163102 100644
+index 78b186265..1207ea47b 100644
 --- a/vllm/model_executor/model_loader/weight_utils.py
 +++ b/vllm/model_executor/model_loader/weight_utils.py
 @@ -29,6 +29,10 @@ from vllm.model_executor.layers.quantization import (QuantizationConfig,
@@ -287,14 +339,14 @@ index 78b186265..719163102 100644
 +        # if name:
 +        #     print(name, param.device, param.dtype, param.shape)
 +        if name: 
-+            blitz_lib.load_weight_from_ipc_handle(param, name)
++            blitz_lib.load_tensor(param, name)
          else:
 -            assert param.size() == loaded_weight.size(), (
 -                f"Attempted to load weight ({loaded_weight.size()}) "
 -                f"into parameter ({param.size()})")
 -
 -            param.data.copy_(loaded_weight)
-+            blitz_lib.load_weight_from_ipc_handle(param, "")
++            blitz_lib.load_tensor(param, "")
      except Exception:
          # NOTE: This exception is added for the purpose of setting breakpoint to
          # debug weight loading issues.
@@ -378,3 +430,16 @@ index 24cd448d8..b4f8152f1 100644
              loaded_params.add(name)
          return loaded_params
  
+diff --git a/vllm/worker/worker_base.py b/vllm/worker/worker_base.py
+index f1c9a0ab0..f52958524 100644
+--- a/vllm/worker/worker_base.py
++++ b/vllm/worker/worker_base.py
+@@ -511,6 +511,8 @@ class WorkerWrapperBase:
+         # one. TODO: investigate if we can remove this field in
+         # `WorkerWrapperBase`, `init_cached_hf_modules` should be
+         # unnecessary now.
++        import blitz_lib
++        blitz_lib.register_rank(rpc_rank)
+         if vllm_config.model_config is not None:
+             # it can be None in tests
+             trust_remote_code = vllm_config.model_config.trust_remote_code

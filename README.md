@@ -15,50 +15,47 @@ docker run -it \
     nvcr.io/nvidia/pytorch:24.06-py3 /bin/bash
 ```
 
-envs
+**envs**
 
 ```bash
 echo 'export CMAKE_PREFIX_PATH=/root/.local' >> /root/.bashrc
 echo 'export PATH=/root/.local/bin:$PATH' >> /root/.bashrc
 source /root/.bashrc
+
+apt update && \
+apt install git vim wget curl autoconf pkg-config libssl-dev libzmq3-dev -y && \
+apt reinstall libibverbs-dev
 ```
 
-grpc
+**lib-blitz**
 
 ```bash
-git clone --recursive -b v1.75.0 https://github.com/grpc/grpc.git
-cd grpc
-mkdir -p cmake/build && \
-cd cmake/build
-cmake \
-    -DgRPC_BUILD_TESTS=OFF \
-    -DgRPC_INSTALL=ON \
-    -DCMAKE_INSTALL_PREFIX=/root/.local \
-    ../..
-make -j64
-make install
-```
-
-lib-blitz
-
-```bash
-git clone --recursive git@github.com:blitz-serving/lib-blitz-scale.git
-cmake -Bbuild -DTORCH_CUDA_ARCH_LIST="8.0"
+git clone --recursive git@github.com:datacanvas-blitzllm/lib-blitz-scale.git
+cmake -Bbuild -DTORCH_CUDA_ARCH_LIST="9.0"
 cmake --build ./build -j
 ```
 
-danger_tensor: for each model, we should convert safetensor files into dangertensor files
+**danger_tensor**: for each model, we should convert safetensor files into dangertensor files
 
 ```bash
-# you should modify some necessary params in make_dangertensors file
+# you should modify some arguments in make_dangertensors file
+# editable args: model_name, model_directory, output_path, tp_size
 python lib-blitz-scale/utils/make_dangertensor.py
 ```
 
-py-blitz-lib
+**py-blitz-lib**
+
+blitz_lib python package should be installed in the same env with vllm
 
 ```bash
 cd blitz_lib
 pip install -e .
+```
+
+**RUN BLITZ_ENGINE**
+```bash
+# in directory lib-blitz-scale
+./build/mq_server
 ```
 
 ### vLLM
@@ -66,53 +63,41 @@ pip install -e .
 - Install editable vLLM, refer to [vllm_doc](https://docs.vllm.ai/en/v0.9.2/getting_started/installation/gpu.html#build-wheel-from-source)
 
 
-modifies in vLLM code
+**Modifies in vLLM code**
 
-from commit hash b2c06509e58d8afefc1b5fb0f3d91f0cc9d9f279 apply changes.patch
+from commit hash ab9f2cfd1942f7ddfee658ce86ea96b4789862af apply changes.patch
+
+```bash
+# in vllm directory
+git checkout -b blitz ab9f2cfd1942f7ddfee658ce86ea96b4789862af
+git apply path-to-changes.patch
+```
+
+
+**RUN OFFLINE INFER TEST**
+
+```bash
+# start blitz_engine before run inference test, see RUN BLITZ_ENGINE section
+python offline_infer.py
+```
 
 ```python
-# in llm.py, class LLM __init__
-import blitz_lib
-blitz_lib.pull_model(model)
+# offline_infer.py
+from vllm import LLM, SamplingParams
 
+model_path = "your-local-model-path"
+prompts = ["haha how are you"]
+sampling_params = SamplingParams(temperature=0, top_p=1, max_tokens=10)
 
-# in linear.py
-from blitz_lib import vllm_hook
-# add @vllm_hook before weight_loader
-@vllm_hook
-def weight_loader(self, param: Parameter, loaded_weight: torch.Tensor):
-    # some codes
+llm = LLM(model=model_path, enforce_eager=True, max_model_len=4096)
 
+outputs = llm.generate(prompts, sampling_params)
 
-# in vocab_parallel_embedding.py VocabParallelEmbedding' weight_loader
-import blitz_lib
-blitz_lib.load_weight_from_ipc_handle(param, "")
-
-
-# in default_loader.py, add func _prepare_dangertensors
-def _prepare_dangertensors(self, directory):
-    import re
-    pattern = re.compile(r"dangertensors\.(\d+)\.meta$")
-    files_with_number = []
-
-    for root, _, files in os.walk(directory):
-        for f in files:
-            match = pattern.match(f)
-            if match:
-                number = int(match.group(1))
-                files_with_number.append((number, os.path.join(root, f)))
-
-    files_with_number.sort(key=lambda x: x[0])
-
-    return [path for _, path in files_with_number]
-# in _get_weights_iterator
-hf_folder, hf_weights_files, use_safetensors, use_dangetensors = ("", [], False, True)
-danger_metas = self._prepare_dangertensors(source.model_or_path)
-# some codes...
-elif use_dangetensors:
-    import blitz_lib
-    pull_done = False
-    while not pull_done:
-        pull_done = blitz_lib.check_model()
-    weights_iterator = dangertensors_weights_iterator(danger_metas, self.load_config.use_tqdm_on_load)
+for output in outputs:
+    prompt = output.prompt
+    generated_text = output.outputs[0].text
+    tokens = output.outputs[0].token_ids
+    print(
+        f"Prompt: {prompt!r}, Generated text: {generated_text!r}, output tokens: {tokens}"
+    )
 ```
