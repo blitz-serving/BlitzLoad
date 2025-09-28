@@ -30,3 +30,9 @@ class RevertHandlerRequest:
 class RevertHandlerResponse:
     def __init__(self, success):
         self.success = success
+class ResetStatusRequest:
+    def __init__(self, rank):
+        self.rank = rank
+class EmptyRequestResponse:
+    def __init__(self):
+        pass

@@ -35,6 +35,7 @@ server_addr_map = {
     "check_model": "tcp://localhost:55556",
     "load_param": "tcp://localhost:55557",
     "revert_handler": "tcp://localhost:55558",
+    "reset_status": "tcp://localhost:55559",
 }
 
 # 需要清除的代理环境变量列表
@@ -127,7 +128,7 @@ class CudaMemManager:
             raise MemoryError("Tensor should be contiguous")
         tensor_ptr = tensor.data_ptr() + tensor_offset
         
-        print(f"Tensor ptr {tensor_ptr}, device ptr {device_ptr}, size {size}")
+        # print(f"Tensor ptr {tensor_ptr}, device ptr {device_ptr}, size {size}")
 
         rt.memcpy(tensor_ptr, device_ptr, size, rt.memcpyDeviceToDevice)
 
@@ -205,6 +206,12 @@ def check_model(model_name:str) -> bool:
     resp_dict = _send_recv(socket, req)
     return resp_dict["done"]
 
+def reset_status():
+    socket = _get_socket(server_addr=server_addr_map["reset_status"])
+    rank = _rank_info[os.getpid()]
+    req = mq_types.ResetStatusRequest(rank=rank)
+    print("Send reset")
+    _send_recv(socket, req)
 
 def print_profile():
     pass

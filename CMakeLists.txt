@@ -12,8 +12,6 @@ list(APPEND CMAKE_PREFIX_PATH "/root/.local")
 find_package(Torch REQUIRED)
 find_package(fmt REQUIRED)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
-# find_package(Protobuf REQUIRED)
-# find_package(gRPC REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PC_ZMQ REQUIRED libzmq)
 
@@ -25,15 +23,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 set(CMAKE_BUILD_TYPE Debug)
-add_subdirectory(third_party/spdlog)
-# add_subdirectory(third_party/cppzmq)
 
 include_directories(BEFORE ${CMAKE_SOURCE_DIR}/third_party/spdlog/include ${CMAKE_SOURCE_DIR}/third_party/cppzmq ${CMAKE_SOURCE_DIR}/third_party/json/single_include)
 include_directories(${CMAKE_SOURCE_DIR}/include ${CMAKE_CURRENT_BINARY_DIR}/generated)
-# add_library(nlohmann_json INTERFACE)
-# target_include_directories(nlohmann_json INTERFACE
-#     ${CMAKE_SOURCE_DIR}/third_party/json/single_include
-# )
 
 
 # ----Engine----
@@ -78,12 +70,16 @@ endif()
 
 add_custom_command(
     OUTPUT mq_types.py
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/utils/gen_type.py
-            ${CMAKE_SOURCE_DIR}/include/mqmsg_structs.hpp
-            > ${CMAKE_SOURCE_DIR}/tests/mq_types.py
-    DEPENDS ${CMAKE_SOURCE_DIR}/include/mqmsg_structs.hpp
+    COMMAND 
+        ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/utils/gen_type.py
+        ${CMAKE_SOURCE_DIR}/include/mqmsg_structs.hpp
+        > ${CMAKE_SOURCE_DIR}/blitz_lib/blitz_lib/mq_types.py
+    DEPENDS 
+        ${CMAKE_SOURCE_DIR}/include/mqmsg_structs.hpp
+        ${CMAKE_SOURCE_DIR}/utils/gen_type.py
     VERBATIM
 )
+
 add_custom_target(generate_py ALL DEPENDS mq_types.py)
 
 add_executable(mq_server src/mq_server.cc src/blitz_engine.cc)

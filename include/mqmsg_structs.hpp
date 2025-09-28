@@ -8,7 +8,6 @@
 using namespace std;
 using nlohmann::json;
 
-
 struct PullModelRequest {
   string model_name;
   int32_t world_size;
@@ -49,7 +48,13 @@ struct RevertHandlerResponse {
   bool success;
 };
 
-// ------------------- JSON 转换 -------------------
+struct ResetStatusRequest {
+  int rank;
+};
+
+struct EmptyRequestResponse {};
+
+// ------------------- JSON -------------------
 
 inline void from_json(const json &j, PullModelRequest &r) {
   j.at("model_name").get_to(r.model_name);
@@ -133,3 +138,14 @@ inline void from_json(const json &j, RevertHandlerResponse &r) {
 inline void to_json(json &j, const RevertHandlerResponse &r) {
   j = json{{"success", r.success}};
 }
+
+inline void from_json(const json &j, ResetStatusRequest &r) {
+  j.at("rank").get_to(r.rank);
+}
+
+inline void to_json(json &j, const ResetStatusRequest &r) {
+  j = json{{"rank", r.rank}};
+}
+inline void from_json(const json &j, EmptyRequestResponse &r) {}
+
+inline void to_json(json &j, const EmptyRequestResponse &r) { j = json{}; }

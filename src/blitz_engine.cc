@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <regex>
@@ -54,10 +55,6 @@ void BlitzEngine::mem_to_tensor(cudaIpcMemHandle_t &handle,
                                 std::string tensor_name, size_t tensor_size,
                                 int tensor_device) {
   LOG_ASSERT(false, "deprecated method");
-  // LOG_ASSERT(dangertensor_map.find(0) != dangertensor_map.end(),
-  //            "Hasn't inited dangertensor[0]");
-  // dangertensor_map[0]->mem_to_tensor(handle, tensor_name, tensor_size,
-  //                                    tensor_device);
 }
 
 void BlitzEngine::buffer_to_tensor(cudaIpcMemHandle_t &handle,
@@ -79,16 +76,15 @@ void BlitzEngine::free_handler(size_t tensor_size, int rank) {
   buf_groups[rank]->free_handler(tensor_size);
 }
 
-void BlitzEngine::mem_to_buffer(std::string model_path, int rank_num) {
-  spdlog::info("Trigger mem2buf");
+void BlitzEngine::mem_to_buffer(std::string danger_tensor_index_name,
+                                int rank_num) {
+  spdlog::info("Trigger mem2buf, dangertensor index {}, ranks {}",
+               danger_tensor_index_name, rank_num);
   for (int _rank = 0; _rank < rank_num; _rank++) {
-    threads.emplace_back(std::thread([this, _rank, model_path]() {
+    threads.emplace_back(std::thread([this, _rank, danger_tensor_index_name]() {
       while (true) {
-        LOG_ASSERT(this->buf_groups[_rank] != nullptr,
-                   "BufGroup is null, cur rank: {}, group size: {}", _rank,
-                   this->buf_groups.size());
         auto status = this->buf_groups[_rank]->mem_to_buffer(
-            *(dangertensor_map[model_path][_rank]));
+            *(dangertensor_map[danger_tensor_index_name][_rank]));
         if (status == buffer::END) {
           spdlog::info("Buffers[{}] load done", _rank);
           break;
@@ -99,10 +95,19 @@ void BlitzEngine::mem_to_buffer(std::string model_path, int rank_num) {
   }
 }
 
-int BlitzEngine::pull_model(std::string model_name_or_path) {
+void BlitzEngine::reset_status(int rank) {
+  spdlog::info("Reset buffers status on rank {}", rank);
+  this->buf_groups[rank]->reset_status();
+}
+
+int BlitzEngine::pull_model(std::string model_name_or_path, int tp_size,
+                            int pp_size) {
   spdlog::info("Want to load model: {}", model_name_or_path);
   std::regex pattern(R"(dangertensors\.(\d+)\.bin)");
   int rank_num = 0;
+  auto rank_file_map = std::map<int, std::string>();
+  auto danger_tensor_index_name =
+      gen_dangertensor_index_name(model_name_or_path, tp_size, pp_size);
   try {
     for (const auto &entry : fs::directory_iterator(model_name_or_path)) {
       if (entry.is_regular_file()) {
@@ -114,19 +119,34 @@ int BlitzEngine::pull_model(std::string model_name_or_path) {
           std::regex_match(filename, match, pattern);
           int rank = std::stoi(match[1].str());
           spdlog::info("Match file {}, rank is {}", filename, rank);
-          dangertensor_map[model_name_or_path][rank] =
-              std::make_unique<dangertensor::DangerTensor>();
-
-          // load files
-          auto bin_file = entry.path().string();
-          auto meta_file = bin_file;
-          auto pos = meta_file.rfind('.');
-          meta_file.replace(pos + 1, meta_file.size() - pos - 1, "meta");
-          auto danger_tensor = dangertensor_map[model_name_or_path][rank].get();
-          danger_tensor->load_meta_from_ssd(meta_file);
-          danger_tensor->load_data_from_ssd(bin_file);
+          rank_file_map[rank] = entry.path().string();
+          if (dangertensor_map.find(danger_tensor_index_name) ==
+                  dangertensor_map.end() ||
+              dangertensor_map[danger_tensor_index_name].find(rank) ==
+                  dangertensor_map[danger_tensor_index_name].end()) {
+            // cannot find danger_tensor
+            spdlog::info("Create dangertensor {}, rank {}",
+                         danger_tensor_index_name, rank);
+            dangertensor_map[danger_tensor_index_name][rank] =
+                std::make_unique<dangertensor::DangerTensor>();
+          } else {
+            spdlog::debug("DangerTensor {}:{} existed",
+                          danger_tensor_index_name, rank);
+          }
         }
       }
+    }
+    for (auto [rank, entry_name] : rank_file_map) {
+      // load files
+      auto bin_file = entry_name;
+      auto meta_file = bin_file;
+      auto pos = meta_file.rfind('.');
+      meta_file.replace(pos + 1, meta_file.size() - pos - 1, "meta");
+      auto danger_tensor =
+          dangertensor_map[danger_tensor_index_name][rank].get();
+      danger_tensor->load_meta_from_ssd(meta_file);
+      danger_tensor->load_data_from_ssd(bin_file);
+      spdlog::info("{} load done", bin_file);
     }
   } catch (const std::exception &e) {
     spdlog::error("Error: {}", e.what());

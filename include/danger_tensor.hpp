@@ -47,6 +47,9 @@ public:
 
   /// read meta file to mock remote transfer
   void load_meta_from_ssd(std::string danger_meta_path) {
+    if (valid) {
+      return;
+    }
     std::fstream f(danger_meta_path, std::ios::in);
     f >> tensor_num;
     metas_vec.resize(tensor_num);
@@ -64,6 +67,9 @@ public:
 
   /// mmap binfile to mock remote weight source
   void load_data_from_ssd(std::string danger_bin_path) {
+    if (valid) {
+      return;
+    }
     file_read_mtx.lock();
     int fd = open(danger_bin_path.c_str(), O_DIRECT | O_RDONLY);
     if (fd == -1) {
@@ -73,7 +79,7 @@ public:
     fstat(fd, &st);
     const size_t file_size = st.st_size;
     CUDA_CHECK(cudaMallocHost(&host_weight_segment, file_size));
-    spdlog::info("Data file size: {}bytes, host weight segment: {:#x}",
+    spdlog::info("Data file size: {}bytes, host weight segment: {:x}",
                  file_size, host_weight_segment);
 
     auto start = std::chrono::high_resolution_clock::now();
@@ -170,7 +176,6 @@ public:
     //              buffer_size, it == metas_vec.end());
     CUDA_CHECK(cudaMemcpyAsync(buffer_ptr, host_weight_segment + start_offset,
                                loaded_size, cudaMemcpyHostToDevice, 0));
-    CUDA_CHECK(cudaStreamSynchronize(0));
     return {loaded_size, it == metas_vec.end()};
   }
 

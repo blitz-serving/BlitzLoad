@@ -1,5 +1,6 @@
 #include "logger.h"
 #include "spdlog/spdlog.h"
+#include <atomic>
 #include <blitz_engine.h>
 #include <chrono>
 #include <common_tools.hpp>
@@ -50,27 +51,36 @@ public:
     zmq::socket_t revert_socket(ctx, zmq::socket_type::rep);
     revert_socket.bind("tcp://*:55558");
 
+    zmq::socket_t reset_socket(ctx, zmq::socket_type::rep);
+    reset_socket.bind("tcp://*:55559");
+
     zmq::pollitem_t items[] = {
         {pull_model_socket, 0, ZMQ_POLLIN, 0},
         {check_model_socket, 0, ZMQ_POLLIN, 0},
         {load_socket, 0, ZMQ_POLLIN, 0},
         {revert_socket, 0, ZMQ_POLLIN, 0},
+        {reset_socket, 0, ZMQ_POLLIN, 0},
     };
 
     while (running) {
-      zmq::poll(items, 4, std::chrono::milliseconds(-1));
+      zmq::poll(items, 5, std::chrono::milliseconds(-1));
 
       if (items[0].revents & ZMQ_POLLIN) {
         zmq::message_t msg;
         auto result = pull_model_socket.recv(msg);
 
         if (result) {
+          spdlog::info("Pull model request");
           PullModelRequest req = json::parse(to_string(msg));
           auto id = gen_sha256(req.model_name);
           (*task_map)[id] = false;
           std::thread([req, id, this] {
-            auto rank_num = engine_ptr->pull_model(req.model_name);
-            engine_ptr->mem_to_buffer(req.model_name, rank_num);
+            int tp_size = 1, pp_size = 1; // FIXME: hard-code
+            auto rank_num =
+                engine_ptr->pull_model(req.model_name, tp_size, pp_size);
+            auto danger_tensor_index_name =
+                gen_dangertensor_index_name(req.model_name, tp_size, pp_size);
+            engine_ptr->mem_to_buffer(danger_tensor_index_name, rank_num);
             LOG_ASSERT(rank_num == req.world_size,
                        "Dangertensor num {} != world size {}", rank_num,
                        req.world_size);
@@ -103,6 +113,7 @@ public:
         zmq::message_t msg;
         auto result = load_socket.recv(msg);
         if (result) {
+          load_revert_cnt += 1;
           LoadTensorRequest req = json::parse(to_string(msg));
           cudaIpcMemHandle_t handle;
           size_t offset;
@@ -121,6 +132,9 @@ public:
         zmq::message_t msg;
         auto result = revert_socket.recv(msg);
         if (result) {
+          load_revert_cnt -= 1;
+          LOG_ASSERT(load_revert_cnt == 0, "Load Revert are not equal: {}",
+                     load_revert_cnt.load());
           RevertHandlerRequest req = json::parse(to_string(msg));
           engine_ptr->free_handler(req.tensor_size, req.rank);
 
@@ -131,12 +145,28 @@ public:
           spdlog::error("Receive Revert Tensor Req Failed");
         }
       }
+
+      if (items[4].revents & ZMQ_POLLIN) {
+        zmq::message_t msg;
+        auto result = reset_socket.recv(msg);
+        if (result) {
+          ResetStatusRequest req = json::parse(to_string(msg));
+          engine_ptr->reset_status(req.rank);
+
+          EmptyRequestResponse resp{};
+          auto reply = build_msg(resp);
+          reset_socket.send(reply, zmq::send_flags::none);
+        } else {
+          spdlog::error("Receive Revert Tensor Req Failed");
+        }
+      }
     }
   }
 
 private:
   std::unique_ptr<blitz::BlitzEngine> engine_ptr;
   std::unique_ptr<std::map<std::string, bool>> task_map;
+  std::atomic<int> load_revert_cnt = 0;
 };
 
 int main() {

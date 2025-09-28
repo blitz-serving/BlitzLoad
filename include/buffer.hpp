@@ -97,13 +97,8 @@ public:
     std::vector<__nv_bfloat16> vals(3);
     CUDA_CHECK(cudaMemcpy(vals.data(), (char *)buffer_ptr + planned_used_size,
                           sizeof(__nv_bfloat16) * 3, cudaMemcpyDeviceToHost));
-    spdlog::info("[Buffer {}:{}] Export Values: [{}, {}, {}]", device,
-                 buffer_idx, __bfloat162float(vals[0]),
-                 __bfloat162float(vals[1]), __bfloat162float(vals[2]));
     CUDA_CHECK(cudaIpcGetMemHandle(handle, buffer_ptr));
     *offset = planned_used_size.load();
-    spdlog::info("[Buffer {}:{}] Export tensor size: 0x{:x}", device,
-                 buffer_idx, load_tensor_size);
     planned_used_size += load_tensor_size;
     if (planned_used_size == local_usable_size) {
       // cannot be written, only free handler can use this buffer now
@@ -126,6 +121,13 @@ public:
       status = EMPTY;
     }
     return status;
+  }
+
+  void reset_status() {
+    local_usable_size = 0;
+    local_used_size = 0;
+    planned_used_size = 0;
+    status = EMPTY;
   }
 
   /// deprecated
@@ -192,10 +194,26 @@ public:
   }
 
   void free_handler(size_t tensor_size) {
-    std::lock_guard<std::mutex> guard(mutexs[read_idx]);
+    std::lock_guard<std::mutex> guard(mutexs[release_idx]);
     auto status = buffers[release_idx]->free_handler(tensor_size);
     if (status == EMPTY) {
       release_idx = (release_idx + 1) % group_size;
+    }
+  }
+
+  void reset_status() {
+    for (int i = 0; i < group_size; i++) {
+      mutexs[i].lock();
+    }
+    read_idx = 0;
+    write_idx = 0;
+    release_idx = 0;
+    buffer_group_read_size = 0;
+    for (std::unique_ptr<Buffer> &buf_ptr : buffers) {
+      buf_ptr->reset_status();
+    }
+    for (int i = group_size - 1; i >= 0; i--) {
+      mutexs[i].unlock();
     }
   }
 

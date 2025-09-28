@@ -16,16 +16,17 @@ public:
   BlitzEngine(std::vector<int> buf_devices, size_t buf_size);
   ~BlitzEngine();
 
-  int pull_model(std::string model_name_or_path);
+  int pull_model(std::string model_name_or_path, int tp_size, int pp_size);
   void mem_to_tensor(cudaIpcMemHandle_t &handle, std::string tensor_name,
                      size_t tensor_size, int tensor_device);
 
-  void mem_to_buffer(std::string model_path, int rank_num);
+  void mem_to_buffer(std::string danger_tensor_index_name, int rank_num);
   void buffer_to_tensor(cudaIpcMemHandle_t &handle, int tensor_device,
                         size_t tensor_size, int rank); // deprecated
   size_t export_handler(cudaIpcMemHandle_t *handle, size_t *offset,
                         size_t tensor_size, int rank);
   void free_handler(size_t tensor_size, int rank);
+  void reset_status(int rank);
 
 private:
   std::vector<std::thread> threads;

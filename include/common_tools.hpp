@@ -4,6 +4,7 @@
 #include <cstring>
 #include <nlohmann/json.hpp>
 #include <openssl/sha.h>
+#include <spdlog/spdlog.h>
 #include <string>
 
 using namespace std;
@@ -29,4 +30,9 @@ inline zmq::message_t build_msg(json object) {
   zmq::message_t msg(payload.size());
   memcpy(msg.data(), payload.data(), payload.size());
   return msg;
+}
+
+inline string gen_dangertensor_index_name(std::string model_name, int tp_size,
+                                          int pp_size) {
+  return fmt::format("{}_{}_{}", model_name, tp_size, pp_size);
 }

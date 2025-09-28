@@ -40,7 +40,7 @@ def main():
 
     import time
 
-    time.sleep(10)
+    time.sleep(5)
     done = False
     while not done:
         time.sleep(0.5)
@@ -59,7 +59,7 @@ def main():
             blitz_lib.load_tensor(param, name)
 
             print(param[-15:].float().cpu().numpy())
-
+    blitz_lib.reset_status()
 
 if __name__ == "__main__":
     main()
