@@ -26,6 +26,8 @@
 
 namespace blitz::dangertensor {
 
+static const size_t ALIGN = 4096;
+
 struct MetaData {
   uint64_t offset;
   uint64_t data_length;
@@ -102,7 +104,8 @@ public:
               size_t nbytes = std::min(chunk_size_in_bytes, file_size - offset);
               char *buf_ptr =
                   reinterpret_cast<char *>(this->host_weight_segment) + offset;
-              ssize_t bytes_read = pread(fd, buf_ptr, nbytes, offset);
+              ssize_t bytes_read =
+                  pread_aligned(fd, buf_ptr, nbytes, offset, file_size);
 
               if (bytes_read < 0) {
                 spdlog::error("Read chunk [0x{:x},0x{:x}] w/ errno: {} {}",
@@ -111,7 +114,7 @@ public:
               } else if ((size_t)bytes_read != nbytes) {
                 spdlog::error(
                     "Read chunk [{:x},{:x}] for {} bytes, but read {} bytes",
-                    offset, offset + nbytes, bytes_read);
+                    offset, offset + nbytes, nbytes, bytes_read);
                 return -2;
               }
 
@@ -156,9 +159,11 @@ public:
           (__nv_bfloat16 *)(host_weight_segment + start_offset + loaded_size);
       loaded_size += ls;
       first_tensor_offset = 0;
-      spdlog::info("[Buffer {}:{}] Loading {}, values: [{}, {}, {}]", device,
-                   buffer_idx, it->name, __bfloat162float(*val),
-                   __bfloat162float(*(val + 1)), __bfloat162float(*(val + 2)));
+      spdlog::info("[Buffer {}:{}] Loading {}, tensor_size: {:x} cum size: "
+                   "0x{:x}, values: [{}, {}, {}]",
+                   device, buffer_idx, it->name, ls, loaded_size,
+                   __bfloat162float(*val), __bfloat162float(*(val + 1)),
+                   __bfloat162float(*(val + 2)));
       it++;
     }
     if (it != metas_vec.end() && loaded_size == 0 &&
@@ -231,6 +236,37 @@ public:
       }
     }
     cudaIpcCloseMemHandle(tensor_ptr);
+  }
+
+private:
+  ssize_t pread_aligned(int fd, void *buf, size_t nbytes, off_t offset,
+                        size_t file_size) {
+    if ((nbytes % ALIGN == 0) && (offset % ALIGN == 0) &&
+        (((uintptr_t)buf) % ALIGN == 0)) {
+      return pread(fd, buf, nbytes, offset);
+    }
+
+    size_t aligned_nbytes = ((nbytes + ALIGN - 1) / ALIGN) * ALIGN;
+
+    void *tmp_buf = nullptr;
+    if (posix_memalign(&tmp_buf, ALIGN, aligned_nbytes) != 0) {
+      spdlog::error("posix_memalign failed");
+      return -1;
+    }
+
+    ssize_t ret = pread(fd, tmp_buf, aligned_nbytes, offset);
+    if (ret < 0) {
+      spdlog::error("Read chunk [0x{:x},0x{:x}] w/ errno: {} {}", offset,
+                    offset + nbytes, errno, strerror(errno));
+      free(tmp_buf);
+      return -1;
+    }
+
+    size_t copy_size = std::min((size_t)ret, nbytes);
+    memcpy(buf, tmp_buf, copy_size);
+
+    free(tmp_buf);
+    return copy_size;
   }
 
 private:
