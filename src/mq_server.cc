@@ -75,16 +75,16 @@ public:
           auto id = gen_sha256(req.model_name);
           (*task_map)[id] = false;
           std::thread([req, id, this] {
-            int tp_size = req.tp_size,
-                pp_size = req.pp_size; // FIXME: hard-code
+            int tp_size = req.tp_size, pp_size = req.pp_size;
             auto rank_num =
                 engine_ptr->pull_model(req.model_name, tp_size, pp_size);
-            auto danger_tensor_index_name =
-                gen_dangertensor_index_name(req.model_name, tp_size, pp_size);
-            engine_ptr->mem_to_buffer(danger_tensor_index_name, rank_num);
             LOG_ASSERT(rank_num == req.world_size,
                        "Dangertensor num {} != world size {}", rank_num,
                        req.world_size);
+            auto danger_tensor_index_name =
+                gen_dangertensor_index_name(req.model_name, tp_size, pp_size);
+            engine_ptr->mem_to_buffer(danger_tensor_index_name, rank_num);
+            
             (*task_map)[id] = true;
           }).detach();
 
@@ -118,10 +118,10 @@ public:
           LoadTensorRequest req = json::parse(to_string(msg));
           cudaIpcMemHandle_t handle;
           size_t offset;
-          auto loaded_size = engine_ptr->export_handler(
+          auto [loaded_size, resize_tensor] = engine_ptr->export_handler(
               &handle, &offset, req.tensor_size, req.rank);
 
-          LoadTensorResponse resp{handle, offset, loaded_size};
+          LoadTensorResponse resp{handle, offset, loaded_size, resize_tensor};
           auto reply = build_msg(resp);
           load_socket.send(reply, zmq::send_flags::none);
         } else {

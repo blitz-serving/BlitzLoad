@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace blitz::buffer {
@@ -62,10 +63,11 @@ public:
       return status;
     }
     status = LOADING;
-    auto [new_loaded_size, ended] = source.mem_to_buffer(
+    auto [new_loaded_size, loaded_sizes_, ended] = source.mem_to_buffer(
         buffer_ptr, buffer_size, buffer_group_read_size, buffer_idx, device);
     this->local_usable_size += new_loaded_size;
     this->local_used_size = 0;
+    this->loaded_sizes = loaded_sizes_;
     buffer_group_read_size += new_loaded_size;
     cudaStreamSynchronize(0);
     status = READY;
@@ -77,16 +79,28 @@ public:
                  : READY;
   }
 
-  std::pair<size_t, bool> export_handler(cudaIpcMemHandle_t *handle,
-                                         size_t *offset, size_t tensor_size) {
+  std::tuple<size_t, bool, bool> export_handler(cudaIpcMemHandle_t *handle,
+                                                size_t *offset,
+                                                size_t tensor_size) {
     std::unique_lock<std::mutex> guard(cv_mtx);
     cv.wait(guard,
             [this] { return this->status == READY || this->status == LOADED; });
     status = LOADED;
+    bool tensor_size_too_large = false;
     auto load_tensor_size = tensor_size;
     if (tensor_size > buffer_size) {
       load_tensor_size = buffer_size;
     }
+    auto should_load_size = std::move(loaded_sizes.front());
+    loaded_sizes.erase(loaded_sizes.begin());
+
+    if (should_load_size < load_tensor_size) {
+      spdlog::debug("Tensor size is larger {} > {}", load_tensor_size,
+                    should_load_size);
+      load_tensor_size = should_load_size;
+      tensor_size_too_large = true;
+    }
+
     LOG_ASSERT(
         local_usable_size >= planned_used_size + load_tensor_size,
         "[Buffer {}:{}] usable size 0x{:x} < used 0x{:x} + tensor size 0x{:x}",
@@ -100,12 +114,15 @@ public:
     CUDA_CHECK(cudaIpcGetMemHandle(handle, buffer_ptr));
     *offset = planned_used_size.load();
     planned_used_size += load_tensor_size;
+    spdlog::info("[Buffer {}:{}] export cum size: {:x}, tensor size: {:x}",
+                 device, buffer_idx, planned_used_size.load(),
+                 load_tensor_size);
     if (planned_used_size == local_usable_size) {
       // cannot be written, only free handler can use this buffer now
       status = PLANNED_EMPTY;
-      return {load_tensor_size, true};
+      return {load_tensor_size, true, tensor_size_too_large};
     }
-    return {load_tensor_size, false};
+    return {load_tensor_size, false, tensor_size_too_large};
   }
 
   Status free_handler(size_t tensor_size) {
@@ -142,6 +159,7 @@ private:
   int buffer_idx = 0;
   void *buffer_ptr;
   const size_t buffer_size;
+  std::vector<size_t> loaded_sizes;
   std::atomic<Status> status = EMPTY;
   std::atomic<size_t> local_usable_size = 0, local_used_size = 0,
                       planned_used_size = 0;
@@ -182,15 +200,15 @@ public:
     return status;
   }
 
-  size_t export_handler(cudaIpcMemHandle_t *handle, size_t *offset,
-                        size_t tensor_size) {
+  std::pair<size_t, bool> export_handler(cudaIpcMemHandle_t *handle,
+                                         size_t *offset, size_t tensor_size) {
     std::lock_guard<std::mutex> guard(mutexs[read_idx]);
-    auto [loaded_size, should_add_readidx] =
+    auto [loaded_size, should_add_readidx, tensor_size_too_large] =
         buffers[read_idx]->export_handler(handle, offset, tensor_size);
     if (should_add_readidx) {
       read_idx = (read_idx + 1) % group_size;
     }
-    return loaded_size;
+    return {loaded_size, tensor_size_too_large};
   }
 
   void free_handler(size_t tensor_size) {

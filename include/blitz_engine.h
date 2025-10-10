@@ -23,8 +23,9 @@ public:
   void mem_to_buffer(std::string danger_tensor_index_name, int rank_num);
   void buffer_to_tensor(cudaIpcMemHandle_t &handle, int tensor_device,
                         size_t tensor_size, int rank); // deprecated
-  size_t export_handler(cudaIpcMemHandle_t *handle, size_t *offset,
-                        size_t tensor_size, int rank);
+  std::pair<size_t, bool> export_handler(cudaIpcMemHandle_t *handle,
+                                         size_t *offset, size_t tensor_size,
+                                         int rank);
   void free_handler(size_t tensor_size, int rank);
   void reset_status(int rank);
 

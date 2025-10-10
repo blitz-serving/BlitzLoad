@@ -75,7 +75,7 @@ def process_and_write_tensors(directory, output_path, safetensor_files, tp_size:
             with safe_open(filename, framework="pt") as f:
                 for name in f.keys():
                     tensor = f.get_tensor(name)
-                    all_tensors[name]= tensor  # 将所有张量添加到字典中
+                    all_tensors[name] = tensor  # 将所有张量添加到字典中
                     all_tensors_name.append(name)
             # tensors = safetensors.torch.load_file(filename)
         except Exception as e:
@@ -168,7 +168,7 @@ def process_and_write_tensors(directory, output_path, safetensor_files, tp_size:
                             assert num_qo_head % tp_size == 0
                             assert num_kv_head % tp_size == 0
 
-                            if "o_proj" in tensor_name:  # Mistral-24B
+                            if "o_proj" in tensor_name:
                                 # [hidden_size, num_qo_head * head_size]
                                 slice_head_num = num_qo_head // tp_size
                                 start_head_idx = tp_rank * slice_head_num
@@ -215,6 +215,7 @@ def process_and_write_tensors(directory, output_path, safetensor_files, tp_size:
                                 tensors.append(
                                     (tensor_name.replace("q_proj", "v_proj"), result)
                                 )
+
                             else:
                                 is_qkv_or_gateup = True
                             # tensor_slice = torch.transpose(tensor_slice, 0, 1)
@@ -225,16 +226,48 @@ def process_and_write_tensors(directory, output_path, safetensor_files, tp_size:
                         print("========================")
                 else:
                     # 1-D tensor
-                    tensors.append((tensor_name, tensor))
                     assert len(tensor.shape) == 1
+                    if "self_attn" in tensor_name:
+                        assert num_qo_head % tp_size == 0
+                        assert num_kv_head % tp_size == 0
+                        if "q_proj.bias" in tensor_name:
+                            is_qkv_or_gateup = True
+                            chunk_size = hidden_size // tp_size
+                            tensor_slice = tensor[
+                                chunk_size * tp_rank : chunk_size * (tp_rank + 1)
+                            ]
+                            k_tensor = all_tensors[
+                                tensor_name.replace("q_proj", "k_proj")
+                            ]
+                            v_tensor = all_tensors[
+                                tensor_name.replace("q_proj", "v_proj")
+                            ]
+                            kv_chunk_size = hidden_size * num_kv_head // tp_size // num_qo_head 
+                            k_tensor_slice = k_tensor[
+                                kv_chunk_size
+                                * tp_rank : kv_chunk_size
+                                * (tp_rank + 1)
+                            ]
+                            v_tensor_slice = v_tensor[
+                                kv_chunk_size
+                                * tp_rank : kv_chunk_size
+                                * (tp_rank + 1)
+                            ]
+                            result = torch.cat(
+                                [tensor_slice, k_tensor_slice, v_tensor_slice],
+                                dim=0,
+                            )
+                            tensors.append(
+                                (tensor_name.replace("q_proj", "v_proj"), result)
+                            )
+                    else:
+                        tensors.append((tensor_name, tensor))
                 # 将张量转换为 NumPy 数组，以便更轻松地处理数据类型
                 for name, tensor in tensors:
                     print(
                         f"Tensor {name} ele_size {tensor.element_size()} n {tensor.nelement()}"
                     )
-                    tensor_vec.append(
-                        (name, tensor.element_size() * tensor.nelement())
-                    )
+                    tensor_vec.append((name, tensor.element_size() * tensor.nelement()))
                     # print(
                     #     f"Name: {tensor_name}, dtype: {tensor.dtype}, shape: {tensor.shape}"
                     # )
@@ -275,10 +308,10 @@ if __name__ == "__main__":
     # model_name = 'DeepSeek-R1-Distill-Llama-8B'
     # model_name = "Mistral-Small-24B-Instruct-2501"
     # model_name = "Qwen3-8B"
-    model_name = "Qwen3-32B"
+    model_name = "Qwen2.5-7B"
     model_directory = "/nvme/ly/models/{}".format(model_name)
-    output_path = "/nvme/ly/tmp_files2"
-    # tensor_order = generate_tensor_order(32)
+    output_path = "/nvme/ly/models/Qwen2.5-7B"
+    # tensor_order = generate_tensor_order(32)g
     tp_size = 1
     process_and_write_tensors(
         model_directory, output_path, get_safetensor_files(model_directory), tp_size

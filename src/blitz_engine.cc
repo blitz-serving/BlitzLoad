@@ -67,8 +67,10 @@ void BlitzEngine::buffer_to_tensor(cudaIpcMemHandle_t &handle,
       buf_groups[rank]->buffer_to_tensor(handle, tensor_size, tensor_device);
 }
 
-size_t BlitzEngine::export_handler(cudaIpcMemHandle_t *handle, size_t *offset,
-                                   size_t tensor_size, int rank) {
+std::pair<size_t, bool> BlitzEngine::export_handler(cudaIpcMemHandle_t *handle,
+                                                    size_t *offset,
+                                                    size_t tensor_size,
+                                                    int rank) {
   return buf_groups[rank]->export_handler(handle, offset, tensor_size);
 }
 

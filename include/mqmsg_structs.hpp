@@ -38,6 +38,7 @@ struct LoadTensorResponse {
   cudaIpcMemHandle_t handler;
   uint64_t offset;
   uint64_t loaded_size;
+  bool resize_tensor;
 };
 
 struct RevertHandlerRequest {
@@ -117,13 +118,16 @@ inline void from_json(const json &j, LoadTensorResponse &r) {
 
   j.at("offset").get_to(r.offset);
   j.at("loaded_size").get_to(r.loaded_size);
+  j.at("resize_tensor").get_to(r.resize_tensor);
 }
 
 inline void to_json(json &j, const LoadTensorResponse &r) {
   vector<uint8_t> arr(sizeof(cudaIpcMemHandle_t));
   memcpy(arr.data(), &r.handler, sizeof(cudaIpcMemHandle_t));
-  j = json{
-      {"handler", arr}, {"offset", r.offset}, {"loaded_size", r.loaded_size}};
+  j = json{{"handler", arr},
+           {"offset", r.offset},
+           {"loaded_size", r.loaded_size},
+           {"resize_tensor", r.resize_tensor}};
 }
 
 inline void from_json(const json &j, RevertHandlerRequest &r) {

@@ -140,9 +140,9 @@ public:
     file_read_mtx.unlock();
   }
 
-  std::pair<size_t, bool> mem_to_buffer(void *buffer_ptr, size_t buffer_size,
-                                        size_t buffer_read_size, int buffer_idx,
-                                        int device) {
+  std::tuple<size_t, std::vector<size_t>, bool>
+  mem_to_buffer(void *buffer_ptr, size_t buffer_size, size_t buffer_read_size,
+                int buffer_idx, int device) {
     LOG_ASSERT(valid, "File hasn't been loaded");
     auto it = std::upper_bound(
         metas_vec.begin(), metas_vec.end(), buffer_read_size,
@@ -152,12 +152,14 @@ public:
 
     size_t loaded_size = 0, start_offset = buffer_read_size,
            first_tensor_offset = buffer_read_size - it->offset;
+    std::vector<size_t> loaded_sizes;
     while (it != metas_vec.end() &&
            loaded_size + it->data_length - first_tensor_offset <= buffer_size) {
       auto ls = it->data_length - first_tensor_offset;
       __nv_bfloat16 *val =
           (__nv_bfloat16 *)(host_weight_segment + start_offset + loaded_size);
       loaded_size += ls;
+      loaded_sizes.push_back(ls);
       first_tensor_offset = 0;
       spdlog::info("[Buffer {}:{}] Loading {}, tensor_size: {:x} cum size: "
                    "0x{:x}, values: [{}, {}, {}]",
@@ -176,12 +178,13 @@ public:
                    device, buffer_idx, it->name, __bfloat162float(*val),
                    __bfloat162float(*(val + 1)), __bfloat162float(*(val + 2)));
       loaded_size = buffer_size;
+      loaded_sizes.push_back(buffer_size);
     }
     // spdlog::info("load size: 0x{:x}:0x{:x}, read done: {}", loaded_size,
     //              buffer_size, it == metas_vec.end());
     CUDA_CHECK(cudaMemcpyAsync(buffer_ptr, host_weight_segment + start_offset,
                                loaded_size, cudaMemcpyHostToDevice, 0));
-    return {loaded_size, it == metas_vec.end()};
+    return {loaded_size, loaded_sizes, it == metas_vec.end()};
   }
 
   void mem_to_tensor(cudaIpcMemHandle_t &handle, std::string tensor_name,

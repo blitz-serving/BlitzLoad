@@ -180,11 +180,15 @@ def load_tensor(param: torch.Tensor, weight_name: str):
         )
         resp_dict = _send_recv(socket_load, req)
         resp = mq_types.LoadTensorResponse(
-            resp_dict["handler"], resp_dict["offset"], resp_dict["loaded_size"]
+            resp_dict["handler"], resp_dict["offset"], resp_dict["loaded_size"], resp_dict["resize_tensor"]
         )
         device_ptr = (
             cuda_mem_manager.cuda_ipc_handle_to_ptr(bytes(resp.handler)) + resp.offset
         )
+        # in bias case, tensor may have to be narrowed, e.g. from ([4608] to [512])
+        if resp.resize_tensor:
+            tensor_size = resp.loaded_size
+            param = param.narrow(0, 0, resp.loaded_size // param.element_size())
         cuda_mem_manager.copy_device_to_tensor(
             device_ptr, param, resp.loaded_size, loaded_bytes
         )
@@ -239,6 +243,8 @@ def _dump_tensor(tensor, tensor_name, out_dir):
         uint8_tensor = tensor.clone().view(torch.uint8)
     np_array = uint8_tensor.numpy()
     bytes_data = np_array.tobytes()
+    os.makedirs(f"/tmp/{out_dir}", exist_ok=True)
+
     with open(f"/tmp/{out_dir}/{tensor_name}.bin", "wb") as f:
         f.write(bytes_data)
         f.close()
