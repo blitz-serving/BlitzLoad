@@ -20,10 +20,11 @@ class LoadTensorRequest:
         self.tensor_size = tensor_size
         self.rank = rank
 class LoadTensorResponse:
-    def __init__(self, handler, offset, loaded_size):
+    def __init__(self, handler, offset, loaded_size, resize_tensor):
         self.handler = handler
         self.offset = offset
         self.loaded_size = loaded_size
+        self.resize_tensor = resize_tensor
 class RevertHandlerRequest:
     def __init__(self, tensor_name, tensor_size, rank):
         self.tensor_name = tensor_name
