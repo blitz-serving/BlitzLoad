@@ -1,12 +1,13 @@
 diff --git a/offline_infer.py b/offline_infer.py
 new file mode 100644
-index 000000000..f302b9dd2
+index 000000000..7e8e823b9
 --- /dev/null
 +++ b/offline_infer.py
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,18 @@
 +from vllm import LLM, SamplingParams
 +
-+model_path = "/nvme/ly/tmp_files2"
++# model_path = "/nvme/ly/tmp_files2"
++model_path = "/nvme/ly/models/Qwen2.5-7B"
 +prompts = ["haha how are you"]
 +sampling_params = SamplingParams(temperature=0, top_p=1, max_tokens=10)
 +
@@ -429,6 +430,19 @@ index 24cd448d8..b4f8152f1 100644
 +                )
              loaded_params.add(name)
          return loaded_params
+ 
+diff --git a/vllm/v1/engine/async_llm.py b/vllm/v1/engine/async_llm.py
+index edc2e235c..921d4bc75 100644
+--- a/vllm/v1/engine/async_llm.py
++++ b/vllm/v1/engine/async_llm.py
+@@ -60,6 +60,8 @@ class AsyncLLM(EngineClient):
+         client_count: int = 1,
+         client_index: int = 0,
+     ) -> None:
++        import blitz_lib
++        blitz_lib.pull_model(vllm_config.model_config.model, vllm_config.parallel_config.tensor_parallel_size * vllm_config.parallel_config.pipeline_parallel_size, vllm_config.parallel_config.tensor_parallel_size, vllm_config.parallel_config.pipeline_parallel_size)
+         """
+         Create an AsyncLLM.
  
 diff --git a/vllm/worker/worker_base.py b/vllm/worker/worker_base.py
 index f1c9a0ab0..f52958524 100644
