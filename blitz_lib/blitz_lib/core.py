@@ -8,13 +8,17 @@ import json
 import functools
 import inspect
 import zmq
-from . import generate_pb2
-from . import generate_pb2_grpc
 from . import mq_types
-from grpc_health.v1 import health_pb2, health_pb2_grpc
+
+from multiprocessing import shared_memory
 
 import os
 from threading import Lock
+
+
+CUDA_IPC_HANDLE_SIZE = 64
+LIB_TIME = 0
+
 
 
 class MqInfo:
@@ -55,9 +59,6 @@ for var in proxy_vars:
         del os.environ[var]
 
 
-CUDA_IPC_HANDLE_SIZE = 64
-TASK_ID = ""
-LIB_TIME = 0
 
 try:
     import cupy.cuda.runtime as rt
@@ -65,18 +66,6 @@ try:
     HAS_CUPY = True
 except ImportError:
     HAS_CUPY = False
-
-
-def health_check(channel) -> bool:
-    stub = health_pb2_grpc.HealthStub(channel)
-    try:
-        response = stub.Check(health_pb2.HealthCheckRequest(service=""))
-        if response.status == health_pb2.HealthCheckResponse.SERVING:
-            return True
-        else:
-            return False
-    except Exception as e:
-        return False
 
 
 def register_fork_handler(channel):
@@ -195,20 +184,23 @@ def load_tensor(param: torch.Tensor, weight_name: str):
 
 
 def pull_model(model_name: str, world_size: int, tp_size: int, pp_size: int):
-    global TASK_ID
     socket = _get_socket(server_addr=server_addr_map["pull_model"])
     req = mq_types.PullModelRequest(
         model_name=model_name, world_size=world_size, tp_size=tp_size, pp_size=pp_size
     )
     resp_dict = _send_recv(socket, req)
-    TASK_ID = resp_dict["task_id"]
-    return TASK_ID
+    task_id = resp_dict["task_id"]
+    shm = shared_memory.SharedMemory(name="task_id", create=True, size=64)
+    shm.buf[:64] = task_id.encode('utf-8')
+    return task_id
 
 
 def check_model(model_name: str) -> bool:
     # global S2H_TIME
     socket = _get_socket(server_addr=server_addr_map["check_model"])
-    req = mq_types.CheckModelRequest(model_name=model_name, task_id=TASK_ID)
+    shm = shared_memory.SharedMemory(name="task_id")
+    task_id = bytes(shm.buf[:64]).decode('utf-8').rstrip('\x00')
+    req = mq_types.CheckModelRequest(model_name=model_name, task_id=task_id)
     resp_dict = _send_recv(socket, req)
     return resp_dict["done"]
 
