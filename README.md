@@ -60,12 +60,12 @@ pip install -e .
 
 ### vLLM
 
-- Install editable vLLM, refer to [vllm_doc](https://docs.vllm.ai/en/v0.9.2/getting_started/installation/gpu.html#build-wheel-from-source)
+- Install editable vLLM, refer to [vllm_doc](https://docs.vllm.ai/en/v0.9.2/getting_started/installation/gpu.html#build-wheel-from-source), you can checkout from commit ab9f2cfd1942f7ddfee658ce86ea96b4789862af
 
 
 **Modifies in vLLM code**
 
-from commit hash ab9f2cfd1942f7ddfee658ce86ea96b4789862af apply changes.patch
+from commit ab9f2cfd1942f7ddfee658ce86ea96b4789862af apply changes.patch
 
 ```bash
 # in vllm directory
@@ -73,6 +73,12 @@ git checkout -b blitz ab9f2cfd1942f7ddfee658ce86ea96b4789862af
 git apply path-to-changes.patch
 ```
 
+**RUN ONLINE SERVING**
+
+```bash
+# start blitz_engine before run inference test, see RUN BLITZ_ENGINE section
+vllm serve <path-to-model>
+```
 
 **RUN OFFLINE INFER TEST**
 
