@@ -114,9 +114,8 @@ public:
     CUDA_CHECK(cudaIpcGetMemHandle(handle, buffer_ptr));
     *offset = planned_used_size.load();
     planned_used_size += load_tensor_size;
-    spdlog::info("[Buffer {}:{}] export cum size: {:x}, tensor size: {:x}",
-                 device, buffer_idx, planned_used_size.load(),
-                 load_tensor_size);
+    spdlog::info("[Buffer {}:{}] export size 0x{:x}, cum export 0x{:x}", device,
+                 buffer_idx, load_tensor_size, planned_used_size.load());
     if (planned_used_size == local_usable_size) {
       // cannot be written, only free handler can use this buffer now
       status = PLANNED_EMPTY;
@@ -194,9 +193,6 @@ public:
     if (status == READY) {
       write_idx = (write_idx + 1) % group_size;
     }
-    // if (status != READY && status != END) {
-    //   write_idx = (write_idx + 1) % group_size;
-    // }
     return status;
   }
 

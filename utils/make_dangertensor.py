@@ -7,7 +7,6 @@ import json
 import re
 from typing import List
 
-tensor_vec = []
 
 
 def get_safetensor_files(dir):
@@ -54,6 +53,7 @@ def process_and_write_tensors(directory, output_path, safetensor_files, tp_size:
         tensor_order (list): 张量名称的顺序，用于写入文件。
     """
 
+    tensor_vec = []
     all_tensors = {}
     all_tensors_name = []
     config_file = os.path.join(directory, "config.json")
@@ -182,13 +182,16 @@ def process_and_write_tensors(directory, output_path, safetensor_files, tp_size:
                                 is_qkv_or_gateup = True
                                 # [num_qo_head * head_size, hidden_size]
                                 slice_head_num = num_qo_head // tp_size
+                                kv_slice_head_num = num_kv_head // tp_size
                                 start_head_idx = tp_rank * slice_head_num
+                                kv_start_head_idx = tp_rank * kv_slice_head_num
                                 tensor_slice = tensor[
                                     start_head_idx
                                     * head_dim : (start_head_idx + slice_head_num)
                                     * head_dim,
                                     :,
                                 ]
+                                print(f"Q size: {tensor.shape} -> {tensor_slice.shape}")
 
                                 k_tensor = all_tensors[
                                     tensor_name.replace("q_proj", "k_proj")
@@ -197,17 +200,19 @@ def process_and_write_tensors(directory, output_path, safetensor_files, tp_size:
                                     tensor_name.replace("q_proj", "v_proj")
                                 ]
                                 k_tensor_slice = k_tensor[
-                                    start_head_idx
-                                    * head_dim : (start_head_idx + slice_head_num)
+                                    kv_start_head_idx
+                                    * head_dim : (kv_start_head_idx + kv_slice_head_num)
                                     * head_dim,
                                     :,
                                 ]
                                 v_tensor_slice = v_tensor[
-                                    start_head_idx
-                                    * head_dim : (start_head_idx + slice_head_num)
+                                    kv_start_head_idx
+                                    * head_dim : (kv_start_head_idx + kv_slice_head_num)
                                     * head_dim,
                                     :,
                                 ]
+                                print(f"K size: {k_tensor.shape} -> {k_tensor_slice.shape}")
+                                print(f"V size: {v_tensor.shape} -> {v_tensor_slice.shape}")
                                 result = torch.cat(
                                     [tensor_slice, k_tensor_slice, v_tensor_slice],
                                     dim=0,
@@ -227,7 +232,7 @@ def process_and_write_tensors(directory, output_path, safetensor_files, tp_size:
                 else:
                     # 1-D tensor
                     assert len(tensor.shape) == 1
-                    if "self_attn" in tensor_name:
+                    if "self_attn" in tensor_name and "bias" in tensor_name:
                         assert num_qo_head % tp_size == 0
                         assert num_kv_head % tp_size == 0
                         if "q_proj.bias" in tensor_name:
@@ -291,6 +296,7 @@ def process_and_write_tensors(directory, output_path, safetensor_files, tp_size:
                 for name, size in tensor_vec:
                     ff.write(f"{name} {size}\n")
                 #     # print(bytes_data)
+                tensor_vec = []
 
                 # for tensor in tensors:
 
@@ -308,11 +314,11 @@ if __name__ == "__main__":
     # model_name = 'DeepSeek-R1-Distill-Llama-8B'
     # model_name = "Mistral-Small-24B-Instruct-2501"
     # model_name = "Qwen3-8B"
-    model_name = "Qwen2.5-7B"
+    model_name = "Qwen3-32B"
     model_directory = "/nvme/ly/models/{}".format(model_name)
-    output_path = "/nvme/ly/models/Qwen2.5-7B"
-    # tensor_order = generate_tensor_order(32)g
-    tp_size = 1
+    output_path = "/nvme/ly/models/Qwen3-32B-tp2"
+    # tensor_order = generate_tensor_order(32)
+    tp_size = 2
     process_and_write_tensors(
         model_directory, output_path, get_safetensor_files(model_directory), tp_size
     )

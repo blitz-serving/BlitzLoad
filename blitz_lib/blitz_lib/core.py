@@ -82,6 +82,9 @@ def register_rank(rank: int):
     _rank_info[proc_id] = rank
     print(f"Proc {proc_id}'s rank is {rank}")
 
+def get_rank():
+    proc_id = os.getpid()
+    return _rank_info[proc_id]
 
 class CudaMemManager:
     def __init__(self):
