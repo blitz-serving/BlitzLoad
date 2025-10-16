@@ -177,10 +177,10 @@ def load_tensor(param: torch.Tensor, weight_name: str):
         device_ptr = (
             cuda_mem_manager.cuda_ipc_handle_to_ptr(bytes(resp.handler)) + resp.offset
         )
-        # in bias case, tensor may have to be narrowed, e.g. from ([4608] to [512])
         if resp.resize_tensor:
+            print(f"Tensor size {tensor_size} != loaded size{resp.loaded_size}")
             tensor_size = resp.loaded_size
-            param = param.narrow(0, 0, resp.loaded_size // param.element_size())
+            assert(False)
         cuda_mem_manager.copy_device_to_tensor(
             device_ptr, param, resp.loaded_size, loaded_bytes
         )

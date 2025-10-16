@@ -95,8 +95,8 @@ public:
     loaded_sizes.erase(loaded_sizes.begin());
 
     if (should_load_size < load_tensor_size) {
-      spdlog::debug("Tensor size is larger {} > {}", load_tensor_size,
-                    should_load_size);
+      spdlog::info("[Buffer {}:{}] Tensor size is larger 0x{:x} > 0x{:x}",
+                   device, buffer_idx, load_tensor_size, should_load_size);
       load_tensor_size = should_load_size;
       tensor_size_too_large = true;
     }

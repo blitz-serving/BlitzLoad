@@ -117,7 +117,6 @@ public:
           LoadTensorRequest req = json::parse(to_string(msg));
           cudaIpcMemHandle_t handle;
           size_t offset;
-          spdlog::info("Buffers[{}] exporting {}", req.rank, req.tensor_name);
           auto [loaded_size, resize_tensor] = engine_ptr->export_handler(
               &handle, &offset, req.tensor_size, req.rank);
 
