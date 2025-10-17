@@ -1,12 +1,11 @@
-diff --git a/offline_infer.py b/offline_infer.py
+diff --git a/offline_infer_vllm.py b/offline_infer_vllm.py
 new file mode 100644
-index 000000000..7e8e823b9
+index 000000000..b16fd85f8
 --- /dev/null
-+++ b/offline_infer.py
-@@ -0,0 +1,18 @@
++++ b/offline_infer_vllm.py
+@@ -0,0 +1,17 @@
 +from vllm import LLM, SamplingParams
 +
-+# model_path = "/nvme/ly/tmp_files2"
 +model_path = "/nvme/ly/models/Qwen2.5-7B"
 +prompts = ["haha how are you"]
 +sampling_params = SamplingParams(temperature=0, top_p=1, max_tokens=10)
@@ -22,28 +21,6 @@ index 000000000..7e8e823b9
 +    print(
 +        f"Prompt: {prompt!r}, Generated text: {generated_text!r}, output tokens: {tokens}"
 +    )
-diff --git a/tests/offline_infer.py b/tests/offline_infer.py
-new file mode 100644
-index 000000000..86e5b995e
---- /dev/null
-+++ b/tests/offline_infer.py
-@@ -0,0 +1,15 @@
-+from vllm import LLM, SamplingParams
-+prompts = [
-+    "haha how are you"
-+]
-+sampling_params = SamplingParams(temperature=0, top_p=1,max_tokens=1)
-+
-+llm = LLM(model="/nvme/models/Qwen3-8B",enforce_eager=True)
-+
-+outputs = llm.generate(prompts, sampling_params)
-+
-+for output in outputs:
-+    prompt = output.prompt
-+    generated_text = output.outputs[0].text
-+    tokens = output.outputs[0].token_ids
-+    print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}, output tokens: {tokens}")
-\ No newline at end of file
 diff --git a/vllm/entrypoints/llm.py b/vllm/entrypoints/llm.py
 index 915f14a29..50dc79246 100644
 --- a/vllm/entrypoints/llm.py
@@ -119,18 +96,20 @@ index 75391c51f..212bb6134 100644
          input_dim = getattr(param, "input_dim", None)
          use_bitsandbytes_4bit = getattr(param, "use_bitsandbytes_4bit", False)
 diff --git a/vllm/model_executor/layers/vocab_parallel_embedding.py b/vllm/model_executor/layers/vocab_parallel_embedding.py
-index 9f223998e..3b483b51f 100644
+index 9f223998e..e10f3ef16 100644
 --- a/vllm/model_executor/layers/vocab_parallel_embedding.py
 +++ b/vllm/model_executor/layers/vocab_parallel_embedding.py
-@@ -211,6 +211,7 @@ class VocabParallelEmbedding(CustomOp):
+@@ -210,7 +210,9 @@ class VocabParallelEmbedding(CustomOp):
+                  prefix: str = ""):
          super().__init__()
  
++        self.prefix = prefix
          # Keep the input dimensions.
 +        self.prefix = prefix
          tp_rank = get_tensor_model_parallel_rank()
          self.tp_size = get_tensor_model_parallel_world_size()
          self.num_embeddings = num_embeddings
-@@ -368,8 +369,9 @@ class VocabParallelEmbedding(CustomOp):
+@@ -368,8 +370,9 @@ class VocabParallelEmbedding(CustomOp):
          # If parameter does not have output dim, then it should
          # be copied onto all gpus (e.g. g_idx for act_order gptq).
          if output_dim is None:
@@ -142,7 +121,7 @@ index 9f223998e..3b483b51f 100644
              return
  
          # Shard indexes for loading the weight
-@@ -386,12 +388,16 @@ class VocabParallelEmbedding(CustomOp):
+@@ -386,12 +389,16 @@ class VocabParallelEmbedding(CustomOp):
              start_idx = start_idx // packed_factor
              shard_size = shard_size // packed_factor
          else:
@@ -164,7 +143,7 @@ index 9f223998e..3b483b51f 100644
      def forward(self, input_):
          if self.tp_size > 1:
 diff --git a/vllm/model_executor/model_loader/default_loader.py b/vllm/model_executor/model_loader/default_loader.py
-index 2b8e44275..cd7dca854 100644
+index 2b8e44275..69898376a 100644
 --- a/vllm/model_executor/model_loader/default_loader.py
 +++ b/vllm/model_executor/model_loader/default_loader.py
 @@ -20,7 +20,7 @@ from vllm.model_executor.model_loader.weight_utils import (
@@ -176,7 +155,7 @@ index 2b8e44275..cd7dca854 100644
  from vllm.platforms import current_platform
  
  logger = init_logger(__name__)
-@@ -171,13 +171,32 @@ class DefaultModelLoader(BaseModelLoader):
+@@ -171,13 +171,36 @@ class DefaultModelLoader(BaseModelLoader):
  
          return hf_folder, hf_weights_files, use_safetensors
  
@@ -184,17 +163,21 @@ index 2b8e44275..cd7dca854 100644
 +        import re
 +        pattern = re.compile(r"dangertensors\.(\d+)\.meta$")
 +        files_with_number = []
++        import blitz_lib
++        rank = blitz_lib.get_rank()
++        file_name = f"dangertensors.{rank}.meta"
 +
 +        for root, _, files in os.walk(directory):
 +            for f in files:
-+                match = pattern.match(f)
-+                if match:
-+                    number = int(match.group(1))
-+                    files_with_number.append((number, os.path.join(root, f)))
++                if f == file_name:
++                    files_with_number.append((rank, os.path.join(root, f)))
++                # match = pattern.match(f)
++                # if match:
++                #     number = int(match.group(1))
++                #     files_with_number.append((number, os.path.join(root, f)))
 +
-+        files_with_number.sort(key=lambda x: x[0])
-+
-+        # 只要文件路径
++        # files_with_number.sort(key=lambda x: x[0])
++        logger.info(f"Get Meta files: {files_with_number}")
 +        return [path for _, path in files_with_number]
 +
      def _get_weights_iterator(
@@ -212,7 +195,7 @@ index 2b8e44275..cd7dca854 100644
          if self.load_config.load_format == "npcache":
              # Currently np_cache only support *.bin checkpoints
              assert use_safetensors is False
-@@ -199,6 +218,12 @@ class DefaultModelLoader(BaseModelLoader):
+@@ -199,6 +222,12 @@ class DefaultModelLoader(BaseModelLoader):
                      hf_weights_files,
                      self.load_config.use_tqdm_on_load,
                  )
@@ -225,7 +208,7 @@ index 2b8e44275..cd7dca854 100644
          else:
              weights_iterator = pt_weights_iterator(
                  hf_weights_files,
-@@ -221,7 +246,9 @@ class DefaultModelLoader(BaseModelLoader):
+@@ -221,7 +250,9 @@ class DefaultModelLoader(BaseModelLoader):
          if self.counter_before_loading_weights == 0.0:
              self.counter_before_loading_weights = time.perf_counter()
          # Apply the prefix.
@@ -236,7 +219,7 @@ index 2b8e44275..cd7dca854 100644
                  for (name, tensor) in weights_iterator)
  
      def get_all_weights(
-@@ -259,6 +286,8 @@ class DefaultModelLoader(BaseModelLoader):
+@@ -259,6 +290,8 @@ class DefaultModelLoader(BaseModelLoader):
          loaded_weights = model.load_weights(
              self.get_all_weights(model_config, model))
          self.counter_after_loading_weights = time.perf_counter()
@@ -428,6 +411,43 @@ index 24cd448d8..b4f8152f1 100644
 +                logger.info(
 +                    f"weight loader: {weight_loader},CPU to GPU2 accumulated time: {cpu2gpu_time}"
 +                )
+             loaded_params.add(name)
+         return loaded_params
+ 
+diff --git a/vllm/model_executor/models/qwen2.py b/vllm/model_executor/models/qwen2.py
+index 7304fbf12..52513f29c 100644
+--- a/vllm/model_executor/models/qwen2.py
++++ b/vllm/model_executor/models/qwen2.py
+@@ -396,7 +396,10 @@ class Qwen2Model(nn.Module):
+                                         default_weight_loader)
+                 loaded_weight = (loaded_weight if loaded_weight.dim() == 0 else
+                                  loaded_weight[0])
+-                weight_loader(param, loaded_weight)
++                if weight_loader == default_weight_loader:
++                    weight_loader(param, loaded_weight, name)
++                else:
++                    weight_loader(param, loaded_weight)
+                 loaded_params.add(scale_name)
+                 continue
+             for (param_name, weight_name, shard_id) in stacked_params_mapping:
+@@ -417,7 +420,7 @@ class Qwen2Model(nn.Module):
+                 weight_loader = getattr(param, "weight_loader",
+                                         default_weight_loader)
+                 if weight_loader == default_weight_loader:
+-                    weight_loader(param, loaded_weight)
++                    weight_loader(param, loaded_weight, name)
+                 else:
+                     weight_loader(param, loaded_weight, shard_id)
+                 break
+@@ -434,7 +437,10 @@ class Qwen2Model(nn.Module):
+                 param = params_dict[name]
+                 weight_loader = getattr(param, "weight_loader",
+                                         default_weight_loader)
+-                weight_loader(param, loaded_weight)
++                if weight_loader == default_weight_loader:
++                    weight_loader(param, loaded_weight, name)
++                else:
++                    weight_loader(param, loaded_weight)
              loaded_params.add(name)
          return loaded_params
  
