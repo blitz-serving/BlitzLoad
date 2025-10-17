@@ -6,7 +6,8 @@ import struct
 import json
 import re
 from typing import List
-from model_mapping import *
+from .models import qwen2, qwen2_5_vl, qwen3
+import argparse
 
 qkv_stacks = ["q", "k", "v"]
 tp_params_dim0 = ["embed", "lm_head", "qkv_proj", "gate_up_proj"]
@@ -152,31 +153,28 @@ def process_and_write_tensors(
                     bytes_data = np_array.tobytes()
                     f.write(bytes_data)
                 print("==========================")
-                # print(tensor_map)
             with open(meta_file, "w") as ff:
                 ff.write(f"{len(tensor_vec)}\n")
                 for name, size in tensor_vec:
                     ff.write(f"{name} {size}\n")
-                #     # print(bytes_data)
                 tensor_vec = []
-
-                # for tensor in tensors:
-
-                # 写入张量数据
-                # tensor_bytes = tensor_np.tobytes()
-                # f.write(tensor_bytes)
 
 
 if __name__ == "__main__":
-    model_name = "Qwen3-VL-30B"
-    model_directory = "/nvme/ly/models/{}".format(model_name)
-    output_path = "/nvme/ly/models/Qwen3-VL-30B-tp2-test"
-    tp_size = 2
-    stacked_params_mapping = match_model_mapping(model_name)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model-path", type=str, required=True, help="model-path")
+    parser.add_argument("--output-path", type=str, required=True, help="output-path, can be equal to model-path")
+    parser.add_argument("--tp-size", type=int, required=True, help="tensor parallel size")
+    args = parser.parse_args()
+    model_path = args.model_path
+    output_path = args.output_path
+    tp_size = args.tp_size
+
+    stacked_params_mapping = qwen2.stacked_param_mapping
     process_and_write_tensors(
-        model_directory,
+        model_path,
         output_path,
-        get_safetensor_files(model_directory),
+        get_safetensor_files(model_path),
         tp_size,
         stacked_params_mapping,
     )
