@@ -6,6 +6,11 @@ import struct
 import json
 import re
 from typing import List
+from model_mapping import *
+
+qkv_stacks = ["q", "k", "v"]
+tp_params_dim0 = ["embed", "lm_head", "qkv_proj", "gate_up_proj"]
+tp_params_dim1 = ["o_proj", "down_proj"]
 
 
 def get_safetensor_files(dir):
@@ -23,70 +28,13 @@ def extract_layer_id(tensor_name: str):
     else:
         raise "Cannot extract layer id"
 
-
-def dump_tensor(tensor, tensor_name):
-    if "embed" not in tensor_name:
-        return
-    try:
-        if not tensor.is_contiguous():
-            uint8_tensor = tensor.contiguous().view(torch.uint8)
-        else:
-            uint8_tensor = tensor.view(torch.uint8)
-    except Exception:
-        # not contiguous, using clone
-        uint8_tensor = tensor.clone().view(torch.uint8)
-    np_array = uint8_tensor.numpy()
-    bytes_data = np_array.tobytes()
-    with open(f"/tmp/vllm/danger-{tensor_name}.bin", "wb") as f:
-        f.write(bytes_data)
-        f.close()
-
-def process_visual_tensor(tensor_name, tensor, tp_size, tp_rank):
-    return tensor
-    if "attn.qkv" in tensor_name:
-        if "weight" in tensor_name:
-            return tensor
-        else:
-            return tensor
-    elif "attn.proj" in tensor_name:
-        return tensor
-    elif "mlp" in tensor_name and "fc1" in tensor_name:
-        return tensor
-    elif "deepstack_merger_list" in tensor_name:
-        return tensor
-    elif 'merger.' in tensor_name and 'deepstack_merger_list' not in tensor_name:
-        if 'linear_fc1' in tensor_name:
-            if 'weight' in tensor_name:
-                return tensor.chunk(tp_size, dim=0)[tp_rank]
-            else:  # bias
-                return tensor.chunk(tp_size, dim=0)[tp_rank]
-                
-        elif 'linear_fc2' in tensor_name:
-            if 'weight' in tensor_name:
-                return tensor.chunk(tp_size, dim=1)[tp_rank]
-            else:  # bias
-                return tensor
-                
-        elif 'norm' in tensor_name:
-            return tensor
-    
-    # patch embedding
-    elif 'patch_embed' in tensor_name:
-        if 'weight' in tensor_name:
-            return tensor.chunk(tp_size, dim=0)[tp_rank]
-        else:  # bias
-            return tensor.chunk(tp_size, dim=0)[tp_rank]
-    
-    # positional embedding  
-    elif 'pos_embed' in tensor_name:
-        return tensor.chunk(tp_size, dim=1)[tp_rank]
-    else:
-        assert("norm" in tensor_name)
-        # norm
-        return tensor
-        
-
-def process_and_write_tensors(directory, output_path, safetensor_files, tp_size: int, is_vision_model: bool = False):
+def process_and_write_tensors(
+    directory,
+    output_path,
+    safetensor_files,
+    tp_size: int,
+    stacked_params_mapping: List[tuple]
+):
     """
     读取指定目录下所有 safetensors 文件，转置所有 2D 张量，并按指定顺序写入二进制文件。
 
@@ -99,23 +47,20 @@ def process_and_write_tensors(directory, output_path, safetensor_files, tp_size:
     tensor_vec = []
     all_tensors = {}
     all_tensors_name = []
+    # create output_path if not exist
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
+    # if outputpath != directory, copy all *.json and *.txt files to output_path
+    if output_path != directory:
+        for file in os.listdir(directory):
+            if file.endswith(".json") or file.endswith(".txt"):
+                src_file = os.path.join(directory, file)
+                dst_file = os.path.join(output_path, file)
+                if not os.path.exists(dst_file):
+                    os.system(f"cp {src_file} {dst_file}")
     config_file = os.path.join(directory, "config.json")
     with open(config_file, "r") as f:
         config = json.load(f)
-    if is_vision_model:
-        text_config = config["text_config"]
-    else:
-        text_config = config
-    vocab_size = text_config["vocab_size"]
-    hidden_size = text_config["hidden_size"]
-    inter_size = text_config["intermediate_size"]
-    head_dim = (
-        text_config["hidden_size"] // text_config["num_attention_heads"]
-        if not "head_dim" in text_config.keys()
-        else text_config["head_dim"]
-    )
-    num_qo_head = text_config["num_attention_heads"]
-    num_kv_head = text_config["num_key_value_heads"]
 
     for filename in safetensor_files:
         try:
@@ -129,8 +74,8 @@ def process_and_write_tensors(directory, output_path, safetensor_files, tp_size:
             print(f"Error loading {filename}: {e}")
             return
 
-    for name in all_tensors_name:
-        print(name)
+    # for name in all_tensors_name:
+    #     print(name)
 
     # return
 
@@ -144,175 +89,52 @@ def process_and_write_tensors(directory, output_path, safetensor_files, tp_size:
             for tensor_name in tensor_order_it:
                 tensor = all_tensors[tensor_name]
                 tensors = []
-                is_qkv_or_gateup = False
+                is_stacked_param = False
                 print(f"[INIT] Name: {tensor_name}, shape: {tensor.shape}")
-                # if tensor_name != "model.visual.deepstack_merger_list.0.norm.bias":
-                #     continue
-
-                if "visual" in tensor_name:
-                    tensor_slice = process_visual_tensor(tensor_name, tensor, tp_size, tp_rank)
-                    tensors.append((tensor_name, tensor_slice))
-                # layer_id = extract_layer_id(tensor_name)
-                else:
-                    # text
-                    if len(tensor.shape) == 2:
-                        # NOTE: fuse gate & up proj
-                        if "gate_proj" in tensor_name:
-                            # cat an push to tensors
-                            is_qkv_or_gateup = True
-                            up_tensor_name = tensor_name.replace("gate_proj", "up_proj")
-                            gate_tensor = tensor
-                            up_tensor = all_tensors[up_tensor_name]
-                            gate_tensor_slice = gate_tensor[
-                                (tp_rank * (inter_size // tp_size)) : (
-                                    (tp_rank + 1) * (inter_size // tp_size)
-                                ),
-                                :,
-                            ]
-                            up_tensor_slice = up_tensor[
-                                (tp_rank * (inter_size // tp_size)) : (
-                                    (tp_rank + 1) * (inter_size // tp_size)
-                                ),
-                                :,
-                            ]
-                            result = torch.cat([gate_tensor_slice, up_tensor_slice])
+                
+                # check if name matches stacked params
+                for param_name, shard_name, shard_id in stacked_params_mapping:
+                    if shard_name in tensor_name:
+                        is_stacked_param = True
+                        shard_id = str(shard_id)
+                        # whether it is qkv or gate_up_proj or something else
+                        if shard_id == "q":
+                            # is qkv
+                            q_tensor_slice = tensor.chunk(tp_size, dim=0)[tp_rank]
+                            k_tensor_slice = all_tensors[tensor_name.replace("q_proj", "k_proj")].chunk(tp_size, dim=0)[tp_rank]
+                            v_tensor_slice = all_tensors[tensor_name.replace("q_proj", "v_proj")].chunk(tp_size, dim=0)[tp_rank]
+                            result = torch.cat([q_tensor_slice, k_tensor_slice, v_tensor_slice], dim=0)
                             result = result.contiguous()
-                            tensors.append((up_tensor_name, result))
-                        elif "up_proj" in tensor_name:
-                            is_qkv_or_gateup = True
-                            if "gate_up_proj" in tensor_name: # fused case
-                                tensor_slice = tensor.chunk(tp_size, dim=0)[tp_rank]
-                                tensors.append((tensor_name, tensor_slice))
-                        # down_proj
-                        elif "down_proj" in tensor_name:
-                            tensor_slice = tensor[
-                                :,
-                                (tp_rank * (inter_size // tp_size)) : (
-                                    (tp_rank + 1) * (inter_size // tp_size)
-                                ),
-                            ]
-                            # tensor_slice = torch.transpose(tensor_slice, 0, 1)
-                            tensor_slice = tensor_slice.contiguous()
-                            tensors.append((tensor_name, tensor_slice))
-                        else:
-                            if "lm_head" in tensor_name:
-                                # [vocab_size, hidden_size]
-                                assert (vocab_size, hidden_size) == tensor.shape
-                                assert vocab_size % tp_size == 0
-                                tensor_slice = tensor[
-                                    (tp_rank * (vocab_size // tp_size)) : (
-                                        (tp_rank + 1) * (vocab_size // tp_size)
-                                    ),
-                                    :,
-                                ]
-                                # tensor_slice = torch.transpose(tensor_slice, 0, 1)
-                                tensor_slice = tensor_slice.contiguous()
-                                tensors.append((tensor_name, tensor_slice))
-                            elif "embed" in tensor_name:
-                                # [vocab_size, hidden_size]
-                                assert (vocab_size, hidden_size) == tensor.shape
-                                assert vocab_size % tp_size == 0
-                                tensor_slice = tensor[
-                                    (tp_rank * (vocab_size // tp_size)) : (
-                                        (tp_rank + 1) * (vocab_size // tp_size)
-                                    ),
-                                    :,
-                                ]
-                                tensor_slice = tensor_slice.contiguous()
-                                tensors.append((tensor_name, tensor_slice))
-                            elif "gate" in tensor_name and "mlp" in tensor_name:
-                                # moe gate, no need to slice
-                                tensors.append((tensor_name, tensor))
-                                # tensors.append((tensor_name, tensor.chunk(tp_size, dim=0)[tp_rank]))
-                            else:
-                                assert "self_attn" in tensor_name
-                                assert num_qo_head % tp_size == 0
-                                assert num_kv_head % tp_size == 0
-
-                                if "o_proj" in tensor_name:
-                                    # [hidden_size, num_qo_head * head_size]
-                                    slice_head_num = num_qo_head // tp_size
-                                    start_head_idx = tp_rank * slice_head_num
-                                    tensor_slice = tensor[
-                                        :,
-                                        start_head_idx
-                                        * head_dim : (start_head_idx + slice_head_num)
-                                        * head_dim,
-                                    ]
-                                elif "q_proj" in tensor_name or "k_proj" in tensor_name or "v_proj" in tensor_name:
-                                    is_qkv_or_gateup = True
-                                    # [num_qo_head * head_size, hidden_size]
-                                    tensor_slice = tensor.chunk(tp_size, dim=0)[tp_rank]
-                                    tensors.append((tensor_name, tensor_slice))
-                                    # k_tensor = all_tensors[
-                                    #     tensor_name.replace("q_proj", "k_proj")
-                                    # ]
-                                    # v_tensor = all_tensors[
-                                    #     tensor_name.replace("q_proj", "v_proj")
-                                    # ]
-                                    # k_tensor_slice = k_tensor.chunk(tp_size, dim=0)[tp_rank]
-                                    # v_tensor_slice = v_tensor.chunk(tp_size, dim=0)[tp_rank]
-                                    # result = torch.cat(
-                                    #     [q_tensor_slice, k_tensor_slice, v_tensor_slice], dim=0
-                                    # )
-                                    # result = result.contiguous()
-                                    # tensors.append(
-                                    #     (tensor_name.replace("q_proj", "v_proj"), result)
-                                    # )
-                                    # print(f"Q size: {tensor.shape} -> {q_tensor_slice.shape}")
-                                    # print(f"K size: {k_tensor.shape} -> {k_tensor_slice.shape}")
-                                    # print(f"V size: {v_tensor.shape} -> {v_tensor_slice.shape}")
-                                    
-
-                                else:
-                                    is_qkv_or_gateup = True
-                                # tensor_slice = torch.transpose(tensor_slice, 0, 1)
-                                if is_qkv_or_gateup == False:
-                                    tensor_slice = tensor_slice.contiguous()
-                                    tensors.append((tensor_name, tensor_slice))
-
-                            print("========================")
-                    elif tensor.dim() == 3:
-                        # no need to slice expert tensors
-                        tensors.append((tensor_name, tensor))
+                            tensors.append((tensor_name.replace("q_proj", "v_proj"), result))
+                        elif shard_id == "0":
+                            # gate_up or something else
+                            # get all slices taht share one param_name
+                            tensor_slices = []
+                            last_name = ""
+                            for pn, sn, sid in stacked_params_mapping:
+                                if pn == param_name:
+                                    t = all_tensors[tensor_name.replace(shard_name, sn)]
+                                    tensor_slices.append(t.chunk(tp_size, dim=0)[tp_rank])
+                                    last_name = sn
+                            # sort tensor_slices by shard_id
+                            tensor_slices = sorted(tensor_slices, key=lambda x: [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", sn)])
+                            # concat all slices
+                            result = torch.cat(tensor_slices, dim=0)
+                            result = result.contiguous()
+                            tensors.append((tensor_name.replace(shard_name, last_name), result))
+                            
+                            
+                if is_stacked_param is False:
+                    if any(x in tensor_name for x in tp_params_dim0):
+                        # should slice
+                        tensor_slice = tensor.chunk(tp_size, dim=0)[tp_rank]
+                        tensors.append((tensor_name, tensor_slice))
+                    elif any(x in tensor_name for x in tp_params_dim1):
+                        tensor_slice = tensor.chunk(tp_size, dim=1)[tp_rank]
+                        tensors.append((tensor_name, tensor_slice))
                     else:
-                        # 1-D tensor
-                        assert len(tensor.shape) == 1
-                        if "self_attn" in tensor_name and "bias" in tensor_name:
-                            assert num_qo_head % tp_size == 0
-                            assert num_kv_head % tp_size == 0
-                            if "q_proj.bias" in tensor_name:
-                                is_qkv_or_gateup = True
-                                chunk_size = hidden_size // tp_size
-                                tensor_slice = tensor[
-                                    chunk_size * tp_rank : chunk_size * (tp_rank + 1)
-                                ]
-                                k_tensor = all_tensors[
-                                    tensor_name.replace("q_proj", "k_proj")
-                                ]
-                                v_tensor = all_tensors[
-                                    tensor_name.replace("q_proj", "v_proj")
-                                ]
-                                kv_chunk_size = hidden_size * num_kv_head // tp_size // num_qo_head 
-                                k_tensor_slice = k_tensor[
-                                    kv_chunk_size
-                                    * tp_rank : kv_chunk_size
-                                    * (tp_rank + 1)
-                                ]
-                                v_tensor_slice = v_tensor[
-                                    kv_chunk_size
-                                    * tp_rank : kv_chunk_size
-                                    * (tp_rank + 1)
-                                ]
-                                result = torch.cat(
-                                    [tensor_slice, k_tensor_slice, v_tensor_slice],
-                                    dim=0,
-                                )
-                                tensors.append(
-                                    (tensor_name.replace("q_proj", "v_proj"), result)
-                                )
-                        else:
-                            tensors.append((tensor_name, tensor))
+                        # no need to slice
+                        tensors.append((tensor_name, tensor))
 
                 for name, tensor in tensors:
                     print(
@@ -329,9 +151,6 @@ def process_and_write_tensors(directory, output_path, safetensor_files, tp_size:
                     np_array = uint8_tensor.numpy()
                     bytes_data = np_array.tobytes()
                     f.write(bytes_data)
-                    # if name == "model.layers.0.mlp.down_proj.weight":
-                    #     with open(f"/tmp/vllm/danger-{name}.bin", "wb") as g:
-                    #         g.write(bytes_data)
                 print("==========================")
                 # print(tensor_map)
             with open(meta_file, "w") as ff:
@@ -351,8 +170,13 @@ def process_and_write_tensors(directory, output_path, safetensor_files, tp_size:
 if __name__ == "__main__":
     model_name = "Qwen3-VL-30B"
     model_directory = "/nvme/ly/models/{}".format(model_name)
-    output_path = "/nvme/ly/models/Qwen3-VL-30B"
+    output_path = "/nvme/ly/models/Qwen3-VL-30B-tp2-test"
     tp_size = 2
+    stacked_params_mapping = match_model_mapping(model_name)
     process_and_write_tensors(
-        model_directory, output_path, get_safetensor_files(model_directory), tp_size, "vl" in model_name.lower()
+        model_directory,
+        output_path,
+        get_safetensor_files(model_directory),
+        tp_size,
+        stacked_params_mapping,
     )
