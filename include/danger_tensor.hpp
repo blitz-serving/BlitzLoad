@@ -34,11 +34,6 @@ struct MetaData {
   std::string name = "";
 };
 
-enum ReadMode {
-  NAME_MATCH,
-  SEQ,
-};
-
 /// One dangertensor file pair -> one DangerTensor object.
 ///
 /// If TP=2, there will be two objects.
@@ -59,7 +54,6 @@ public:
       std::string tensor_name;
       uint64_t data_length;
       f >> tensor_name >> data_length;
-      metas_map[tensor_name] = {danger_tensor_file_size, data_length};
       metas_vec[i] = {danger_tensor_file_size, data_length, tensor_name};
       danger_tensor_file_size += data_length;
     }
@@ -161,11 +155,14 @@ public:
       loaded_size += ls;
       loaded_sizes.push_back(ls);
       first_tensor_offset = 0;
-      spdlog::info("[Buffer {}:{}] Loading {}, tensor_size: {:x} cum size: "
-                   "0x{:x}, values: [{}, {}, {}]",
-                   device, buffer_idx, it->name, ls, loaded_size,
-                   __bfloat162float(*val), __bfloat162float(*(val + 1)),
-                   __bfloat162float(*(val + 2)));
+      spdlog::info(
+          "[Buffer {}:{}] Loading {}, tensor_size 0x{:x}, cum_size 0x{:x}",
+          device, buffer_idx, it->name, ls, loaded_size);
+      // spdlog::info("[Buffer {}:{}] Loading {}, values: [{}, {}, {}]",
+      // device,
+      //              buffer_idx, it->name, __bfloat162float(*val),
+      //              __bfloat162float(*(val + 1)), __bfloat162float(*(val +
+      //              2)));
       it++;
     }
     if (it != metas_vec.end() && loaded_size == 0 &&
@@ -185,60 +182,6 @@ public:
     CUDA_CHECK(cudaMemcpyAsync(buffer_ptr, host_weight_segment + start_offset,
                                loaded_size, cudaMemcpyHostToDevice, 0));
     return {loaded_size, loaded_sizes, it == metas_vec.end()};
-  }
-
-  void mem_to_tensor(cudaIpcMemHandle_t &handle, std::string tensor_name,
-                     size_t tensor_length, int tensor_device) {
-    LOG_ASSERT(valid, "File hasn't been loaded");
-
-    cudaSetDevice(tensor_device);
-    void *tensor_ptr = nullptr;
-    cudaIpcOpenMemHandle(&tensor_ptr, handle, cudaIpcMemLazyEnablePeerAccess);
-
-    if (!tensor_name.empty()) {
-      LOG_ASSERT(mode != SEQ,
-                 "Has inited as sequential mode, cannot find by name");
-      LOG_ASSERT(metas_map.find(tensor_name) != metas_map.end(),
-                 "Cannot find tensor {}", tensor_name);
-      auto [offset, length, _name] = metas_map[tensor_name];
-      LOG_ASSERT(length == tensor_length,
-                 "Input tensor_length {} != metas's tensor_length {} ({})",
-                 tensor_length, length, tensor_name);
-
-      spdlog::info("Loading tensor {}, length {}", tensor_name, tensor_length);
-      CUDA_CHECK(cudaMemcpy(tensor_ptr, host_weight_segment + offset,
-                            tensor_length, cudaMemcpyHostToDevice));
-      if (tensor_name.find("norm") != std::string::npos) {
-        // check norm value, get first value
-        __nv_bfloat16 first_val;
-        CUDA_CHECK(cudaMemcpy(&first_val, tensor_ptr, sizeof(__nv_bfloat16),
-                              cudaMemcpyDeviceToHost));
-        spdlog::info("First value of {} is {}", tensor_name,
-                     __bfloat162float(first_val));
-      }
-    } else {
-      // sequential mode
-      mode = SEQ;
-      auto idx = meta_vec_idx.fetch_add(1);
-      auto [offset, length, name] = metas_vec[idx];
-      LOG_ASSERT(length == tensor_length,
-                 "Input tensor_length {} != metas's tensor {}, length {}",
-                 tensor_length, name, length);
-      spdlog::info("Loading tensor {}, length {}", name, tensor_length);
-      // if (tensor_length > 1024 * 1024 * 1024) {
-      CUDA_CHECK(cudaMemcpy(tensor_ptr, host_weight_segment + offset,
-                            tensor_length, cudaMemcpyHostToDevice));
-
-      if (name.find("norm") != std::string::npos) {
-        // check norm value, get first value
-        __nv_bfloat16 first_val;
-        CUDA_CHECK(cudaMemcpy(&first_val, tensor_ptr, sizeof(__nv_bfloat16),
-                              cudaMemcpyDeviceToHost));
-        spdlog::info("First value of {} is {}", name,
-                     __bfloat162float(first_val));
-      }
-    }
-    cudaIpcCloseMemHandle(tensor_ptr);
   }
 
 private:
@@ -278,20 +221,15 @@ private:
   // when buffer read from src, this will record read_offset and loaded_tensors
   std::atomic<int> loaded_tensors = 0;
 
-  ReadMode mode = NAME_MATCH;
-  std::atomic<size_t> meta_vec_idx = 0;
-  std::map<std::string, MetaData>
-      metas_map;                   // name, offset, length (NAME_MATCH)
+  // std::atomic<size_t> meta_vec_idx = 0;
   std::vector<MetaData> metas_vec; // offset, length (SEQ)
 
+  // used when there's no gdr, mock only
   std::mutex file_read_mtx;
   const int nthreads;
   const size_t chunk_size_in_bytes;
   char *host_weight_segment = nullptr;
   std::atomic<bool> valid = false;
-
-  // used when there's no gdr, mock only
-  void *weight_file_ptr;
 };
 
 } // namespace blitz::dangertensor

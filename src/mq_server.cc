@@ -114,7 +114,6 @@ public:
         zmq::message_t msg;
         auto result = load_socket.recv(msg);
         if (result) {
-          load_revert_cnt += 1;
           LoadTensorRequest req = json::parse(to_string(msg));
           cudaIpcMemHandle_t handle;
           size_t offset;
@@ -133,9 +132,6 @@ public:
         zmq::message_t msg;
         auto result = revert_socket.recv(msg);
         if (result) {
-          load_revert_cnt -= 1;
-          LOG_ASSERT(load_revert_cnt == 0, "Load Revert are not equal: {}",
-                     load_revert_cnt.load());
           RevertHandlerRequest req = json::parse(to_string(msg));
           engine_ptr->free_handler(req.tensor_size, req.rank);
 
@@ -167,7 +163,7 @@ public:
 private:
   std::unique_ptr<blitz::BlitzEngine> engine_ptr;
   std::unique_ptr<std::map<std::string, bool>> task_map;
-  std::atomic<int> load_revert_cnt = 0;
+  // std::atomic<int> load_revert_cnt = 0;
 };
 
 int main() {

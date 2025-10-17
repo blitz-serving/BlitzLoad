@@ -31,16 +31,16 @@ apt reinstall libibverbs-dev
 
 ```bash
 git clone --recursive git@github.com:datacanvas-blitzllm/lib-blitz-scale.git
-cmake -Bbuild -DTORCH_CUDA_ARCH_LIST="9.0"
+cmake -Bbuild -DTORCH_CUDA_ARCH_LIST="9.0" # for h100/h20
 cmake --build ./build -j
 ```
 
-**danger_tensor**: for each model, we should convert safetensor files into dangertensor files
+**danger_tensor**: for each model, we should convert safetensor files into dangertensor files, to enable our engine to load model from local-ssd
 
 ```bash
-# you should modify some arguments in make_dangertensors file
-# editable args: model_name, model_directory, output_path, tp_size
-python lib-blitz-scale/utils/make_dangertensor.py
+# Add model stacked_param_mapping config to utils/models directory, you can find mapping config from vllm
+# e.g. add qwen2.5-vl config: open vllm/model_executor/models/qwen2_5_vl.py and find stacked_param_mapping, add the corresponding file in `utils/models` directory
+python -m utils.make_dangertensor --model-path <model-path> --output-path <output-path> --tp-size <tp-size>
 ```
 
 **py-blitz-lib**
@@ -77,7 +77,7 @@ git apply path-to-changes.patch
 
 ```bash
 # start blitz_engine before run inference test, see RUN BLITZ_ENGINE section
-vllm serve <path-to-model>
+vllm serve <path-to-model> (--tensor-parallel-size <tp-size>)
 ```
 
 **RUN OFFLINE INFER TEST**
@@ -92,10 +92,11 @@ python offline_infer.py
 from vllm import LLM, SamplingParams
 
 model_path = "your-local-model-path"
+tp_size = your-tp-size
 prompts = ["haha how are you"]
 sampling_params = SamplingParams(temperature=0, top_p=1, max_tokens=10)
 
-llm = LLM(model=model_path, enforce_eager=True, max_model_len=4096)
+llm = LLM(model=model_path, tensor_parallel_size = tp_size, enforce_eager=True, max_model_len=4096)
 
 outputs = llm.generate(prompts, sampling_params)
 
