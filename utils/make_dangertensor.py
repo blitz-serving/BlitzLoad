@@ -131,7 +131,10 @@ def process_and_write_tensors(
                         tensor_slice = tensor.chunk(tp_size, dim=0)[tp_rank]
                         tensors.append((tensor_name, tensor_slice))
                     elif any(x in tensor_name for x in tp_params_dim1):
-                        tensor_slice = tensor.chunk(tp_size, dim=1)[tp_rank]
+                        if tensor.dim() == 1:
+                            tensor_slice = tensor.chunk(tp_size, dim=0)[tp_rank]
+                        else:
+                            tensor_slice = tensor.chunk(tp_size, dim=1)[tp_rank]
                         tensors.append((tensor_name, tensor_slice))
                     else:
                         # no need to slice

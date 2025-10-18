@@ -57,16 +57,6 @@ void BlitzEngine::mem_to_tensor(cudaIpcMemHandle_t &handle,
   LOG_ASSERT(false, "deprecated method");
 }
 
-void BlitzEngine::buffer_to_tensor(cudaIpcMemHandle_t &handle,
-                                   int tensor_device, size_t tensor_size,
-                                   int rank) {
-  LOG_ASSERT(std::find(buf_devices.begin(), buf_devices.end(), tensor_device) !=
-                 buf_devices.end(),
-             "Hasn't access p2p");
-  auto status =
-      buf_groups[rank]->buffer_to_tensor(handle, tensor_size, tensor_device);
-}
-
 std::pair<size_t, bool> BlitzEngine::export_handler(cudaIpcMemHandle_t *handle,
                                                     size_t *offset,
                                                     size_t tensor_size,

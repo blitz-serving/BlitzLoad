@@ -37,6 +37,7 @@ struct MetaData {
 /// One dangertensor file pair -> one DangerTensor object.
 ///
 /// If TP=2, there will be two objects.
+/// DangerTensor objecst can only be used in 'ssd' case
 class DangerTensor {
 public:
   DangerTensor(size_t chunk_size = 512 * 1024 * 1024, int thread_num = 5)
@@ -134,6 +135,7 @@ public:
     file_read_mtx.unlock();
   }
 
+  /// load weights from host-mem to device-mem
   std::tuple<size_t, std::vector<size_t>, bool>
   mem_to_buffer(void *buffer_ptr, size_t buffer_size, size_t buffer_read_size,
                 int buffer_idx, int device) {
@@ -158,11 +160,6 @@ public:
       spdlog::info(
           "[Buffer {}:{}] Loading {}, tensor_size 0x{:x}, cum_size 0x{:x}",
           device, buffer_idx, it->name, ls, loaded_size);
-      // spdlog::info("[Buffer {}:{}] Loading {}, values: [{}, {}, {}]",
-      // device,
-      //              buffer_idx, it->name, __bfloat162float(*val),
-      //              __bfloat162float(*(val + 1)), __bfloat162float(*(val +
-      //              2)));
       it++;
     }
     if (it != metas_vec.end() && loaded_size == 0 &&

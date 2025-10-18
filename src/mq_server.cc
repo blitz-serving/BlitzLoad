@@ -84,7 +84,7 @@ public:
             auto danger_tensor_index_name =
                 gen_dangertensor_index_name(req.model_name, tp_size, pp_size);
             engine_ptr->mem_to_buffer(danger_tensor_index_name, rank_num);
-            
+
             (*task_map)[id] = true;
           }).detach();
 
@@ -166,8 +166,44 @@ private:
   // std::atomic<int> load_revert_cnt = 0;
 };
 
-int main() {
-  auto server = Mq_Server({0, 1, 2}, 512 * 1024 * 1024);
+std::vector<int> parse_devices(const std::string &devices_str) {
+  std::vector<int> devices;
+  std::stringstream ss(devices_str);
+  std::string token;
+  while (std::getline(ss, token, ',')) {
+    try {
+      devices.push_back(std::stoi(token));
+    } catch (const std::invalid_argument &) {
+      std::cerr << "Invalid device id: " << token << std::endl;
+      exit(1);
+    }
+  }
+  return devices;
+}
+
+int main(int argc, char *argv[]) {
+  std::vector<int> devices;
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+
+    if (arg == "--devices") {
+      if (i + 1 >= argc) {
+        std::cerr << "Error: --devices requires a value (e.g., --devices 0,1,2)"
+                  << std::endl;
+        return 1;
+      }
+      devices = parse_devices(argv[++i]);
+    } else if (arg.rfind("--devices=", 0) == 0) {
+      devices = parse_devices(arg.substr(10));
+    }
+  }
+
+  if (devices.empty()) {
+    std::cout << "No devices specified. Use --devices 0,1,2 to select GPUs.\n";
+    return 0;
+  }
+
+  auto server = Mq_Server(devices, 512 * 1024 * 1024);
   server.run();
   return 0;
 }

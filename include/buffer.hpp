@@ -15,15 +15,10 @@
 
 namespace blitz::buffer {
 
-/// emtpy -> loading -> ready -> loaded -> emtpy -> ... -> end
-enum Status {
-  EMPTY,
-  LOADING,
-  READY,
-  LOADED,
-  PLANNED_EMPTY,
-  END,
-};
+enum LoadMethod { SSD, RDMA_P2P, RDMA_AGGR, UNKNOWN };
+
+/// emtpy -> loading -> ready -> loaded -> planned_empty -> emtpy -> ... -> end
+enum Status { EMPTY, LOADING, READY, LOADED, PLANNED_EMPTY, END };
 
 inline std::string to_string(blitz::buffer::Status s) {
   switch (s) {
@@ -35,6 +30,8 @@ inline std::string to_string(blitz::buffer::Status s) {
     return "READY";
   case blitz::buffer::Status::LOADED:
     return "LOADED";
+  case blitz::buffer::Status::PLANNED_EMPTY:
+    return "PLANNED_EMPTY";
   case blitz::buffer::Status::END:
     return "END";
   default:
@@ -57,6 +54,8 @@ public:
     spdlog::info("[Buffer {}:{}] Init", device, buffer_idx);
   }
 
+  /// [SSD] Load weights from host-mem to device-mem, using Dangertensor as
+  /// source
   Status mem_to_buffer(dangertensor::DangerTensor &source,
                        size_t &buffer_group_read_size) {
     if (status != EMPTY) {
@@ -79,6 +78,8 @@ public:
                  : READY;
   }
 
+  /// Universally usable method, export tensor's handler to other process, e.g.
+  /// vllm
   std::tuple<size_t, bool, bool> export_handler(cudaIpcMemHandle_t *handle,
                                                 size_t *offset,
                                                 size_t tensor_size) {
@@ -124,6 +125,8 @@ public:
     return {load_tensor_size, false, tensor_size_too_large};
   }
 
+  /// Universally usable method, when other process's copied data, the handler
+  /// can be freed
   Status free_handler(size_t tensor_size) {
     local_used_size += tensor_size;
     if (local_used_size == local_usable_size) {
@@ -139,18 +142,12 @@ public:
     return status;
   }
 
+  /// When model has been loaded, buffer's status will be reset
   void reset_status() {
     local_usable_size = 0;
     local_used_size = 0;
     planned_used_size = 0;
     status = EMPTY;
-  }
-
-  /// deprecated
-  Status buffer_to_tensor(cudaIpcMemHandle_t &handle, size_t tensor_size,
-                          int tensor_device) {
-    LOG_ASSERT(false, "Deprecated method");
-    return this->status.load();
   }
 
 private:
@@ -185,6 +182,8 @@ public:
       is_empty.emplace_back(1);
     }
   }
+
+  void set_method(LoadMethod method_) { this->method = method_; }
 
   Status mem_to_buffer(dangertensor::DangerTensor &source) {
     std::lock_guard<std::mutex> guard(mutexs[write_idx]);
@@ -231,17 +230,6 @@ public:
     }
   }
 
-  Status buffer_to_tensor(cudaIpcMemHandle_t &handle, size_t tensor_size,
-                          int tensor_device) {
-    std::lock_guard<std::mutex> guard(mutexs[read_idx]);
-    auto status =
-        buffers[read_idx]->buffer_to_tensor(handle, tensor_size, tensor_device);
-    if (status == EMPTY) {
-      read_idx = (read_idx + 1) % group_size;
-    }
-    return status;
-  }
-
 private:
   std::vector<std::unique_ptr<Buffer>> buffers;
   std::vector<std::mutex> mutexs;
@@ -251,6 +239,7 @@ private:
   std::atomic<int> release_idx;
   std::atomic<int> write_idx;
   size_t buffer_group_read_size;
+  LoadMethod method = SSD;
 };
 
 } // namespace blitz::buffer
