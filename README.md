@@ -1,5 +1,10 @@
 # blitz-scale-vllm
 
+## Demo
+<div align="center">
+<img src="./docs/blitzonvllm.gif" alt="raw vLLM v.s. blitz on vLLM"  height="400">
+</div>
+
 ## Quick Start
 
 ### Engine
