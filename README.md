@@ -1,4 +1,25 @@
-# blitz-scale-vllm
+# BlitzLoad
+
+**Accelerating Model Cold Start**
+BlitzLoad is a lightweight library designed to **drastically reduce model cold start time** in large-scale inference systems.
+It can be seamlessly integrated into [vLLM](https://github.com/vllm-project/vllm) to accelerate model loading and initialization, especially in distributed or multi-GPU environments.
+
+---
+
+* ⚡ **Fast Cold Start**
+  Reduce model loading latency by leveraging a distributed model pool and underlying compute fabrics to efficiently allocate and load models across nodes.
+
+* 🔗 **Seamless Integration with vLLM**
+  Works as a drop-in enhancement — no need to modify vLLM’s core loading logic.
+
+* 🔄 **Distributed-Aware Design**
+  Supports both single-node multi-GPU and multi-node setups, accelerating model initialization across ranks.
+
+
+📢 **Disclaimer**
+The distributed Weight Registry component in BlitzLoad is not open-sourced yet, as it is tightly coupled with specific cloud vendors’ infrastructure and compute fabrics.
+We plan to release an open-source version with vendor approval, which will remove proprietary policies but still provide minimal functionality for community use and research.
+
 
 ## Demo
 <div align="center">
