@@ -1,6 +1,6 @@
 # BlitzLoad
 
-**Accelerating Model Cold Start**
+**Accelerating Model Serving Cold Start**
 
 BlitzLoad is a lightweight library designed to **drastically reduce model cold start time** with the primary focus of reducing model weight reading time in large-scale inference systems. It is designed with a minimal API such that it can be seamlessly integrated into existing systems like [vLLM](https://github.com/vllm-project/vllm) to accelerate model loading and initialization, especially in distributed or multi-GPU environments.
 
@@ -8,10 +8,10 @@ The key to fast model loading is leveraging hierarchical loading using a transfe
 
 ---
 
-* ⚡ **Fast Cold Start**
+* ⚡ **Fast LLM Serving Instance Cold Start**
   Reduce model loading latency by leveraging a distributed model pool and underlying compute fabrics to efficiently allocate and load models across nodes.
 
-* 🔗 **Seamless Integration with vLLM**
+* 🔗 **Seamless Integration with major engines like vLLM**
   Works as a drop-in enhancement — no need to modify vLLM’s core loading logic.
 
 * 🔄 **Distributed-Aware Design**
@@ -93,12 +93,12 @@ python offline_infer.py
 ```
 
 ## Roadmap
-- Features
-  - [] Scale-up/scale-out hybrid bandwidth aggregation
+- Features (original implementation in https://github.com/blitz-serving/blitz-scale)
+  - [] Port scale-up/scale-out hybrid bandwidth aggregation
+  - [] Supporting controller to generate distributed load plan within cluster online   
 
 - Integration to serving ecosystem
-  - [] Supporting controller to generate distributed load plan within cluster online   
-  - [] Co-design with model switch mechanism, e,g, [kvcached](https://github.com/ovg-project/kvcached)
+  - [] Co-design with model switch mechanism to further minimize the engine' control plane overhead, e,g, [kvcached](https://github.com/ovg-project/kvcached)
 
 ## Citation
 
