@@ -29,7 +29,7 @@ The key to fast model loading is leveraging hierarchical loading using a transfe
 
 **prerequisite**
 
-We recommend to use NVIDIA's official containers, e.g., `nvcr.io/nvidia/pytorch:24.06-py3`, and a step-by-step instruction can be found at [use_nv_container](https://github.com/blitz-serving/BlitzLoad/docs/use_nv_container.md). 
+We recommend to use NVIDIA's official containers, e.g., `nvcr.io/nvidia/pytorch:24.06-py3`, and a step-by-step instruction can be found at [use_nv_container](https://github.com/blitz-serving/BlitzLoad/blob/main/docs/use_nv_container.md). 
 
 **lib-blitz**
 
@@ -85,7 +85,7 @@ vllm serve <path-to-model> (--tensor-parallel-size <tp-size>)
 
 **RUN OFFLINE INFER TEST**
 
-We provide a testing script at [offline_infer.py](https://github.com/blitz-serving/BlitzLoad/examples/offline_infer.py), where vLLM loads model weight via BlitzLoad first and then performs offline inference.
+We provide a testing script at [offline_infer.py](https://github.com/blitz-serving/BlitzLoad/blob/main/examples/offline_infer.py), where vLLM loads model weight via BlitzLoad first and then performs offline inference.
 
 ```bash
 # start blitz_engine before run inference test, see RUN BLITZ_ENGINE section
