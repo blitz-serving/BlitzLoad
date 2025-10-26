@@ -34,7 +34,7 @@ We recommend to use NVIDIA's official containers, e.g., `nvcr.io/nvidia/pytorch:
 **lib-blitz**
 
 ```bash
-git clone --recursive git@github.com:datacanvas-blitzllm/lib-blitz-scale.git
+git clone --recursive https://github.com/blitz-serving/BlitzLoad.git
 cmake -Bbuild -DTORCH_CUDA_ARCH_LIST="9.0" # for h100/h20
 cmake --build ./build -j
 ```
