@@ -94,11 +94,11 @@ python offline_infer.py
 
 ## Roadmap
 - Features (original implementation in https://github.com/blitz-serving/blitz-scale)
-  - [] Port scale-up/scale-out hybrid bandwidth aggregation
-  - [] Supporting controller to generate distributed load plan within cluster online   
+  - [ ] Port scale-up/scale-out hybrid bandwidth aggregation
+  - [ ] Supporting controller to generate distributed load plan within cluster online   
 
 - Integration to serving ecosystem
-  - [] Co-design with model switch mechanism to further minimize the engine' control plane overhead, e,g, [kvcached](https://github.com/ovg-project/kvcached)
+  - [ ] Co-design with model switch mechanism to further minimize the engine' control plane overhead, e,g, [kvcached](https://github.com/ovg-project/kvcached)
 
 ## Citation
 
