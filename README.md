@@ -16,7 +16,7 @@ BlitzLoad is a lightweight model checkpoint loading engine that minimizes the la
 
 **1. Prerequisites**
 
-- CUDA-capable GPUs (H100/H200 recommended) and NCCL-compatible fabric if running multi-node.
+- CUDA-capable GPUs (H100/H20 recommended) and NCCL-compatible fabric if running multi-node.
 - NVIDIA PyTorch container such as `nvcr.io/nvidia/pytorch:24.06-py3` or an equivalent environment (see `docs/use_nv_container.md`).
 
 **2. Steps**
