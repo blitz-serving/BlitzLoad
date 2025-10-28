@@ -35,7 +35,7 @@ BlitzLoad is a lightweight model checkpoint loading engine that minimizes the la
    ```bash
    pip install -e blitz_lib
    ```
-4. Convert model weights to the BlitzLoad DangerTensor format (see `docs/examples.md` for detailed guidance):
+4. Convert model weights you want to accelerate to the BlitzLoad DangerTensor format (see `docs/examples.md` for detailed guidance):
    ```bash
    python -m utils.make_dangertensor --model-path <model> --output-path <output> --tp-size <tp>
    ```
