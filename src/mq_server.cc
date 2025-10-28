@@ -1,4 +1,5 @@
 #include "logger.h"
+#include "spdlog/fmt/bundled/format.h"
 #include "spdlog/spdlog.h"
 #include <atomic>
 #include <blitz_engine.h>
@@ -31,39 +32,42 @@ void signal_handler(int) { running = false; }
 
 class Mq_Server {
 public:
-  Mq_Server(std::vector<int> devices, size_t buffer_size) {
+  Mq_Server(std::vector<int> devices, size_t buffer_size, int port = 55555) {
     engine_ptr = std::make_unique<blitz::BlitzEngine>(devices, buffer_size);
     task_map = std::make_unique<std::map<string, bool>>();
+    this->port = port;
   }
 
   void run() {
     zmq::context_t ctx(1);
 
     zmq::socket_t pull_model_socket(ctx, zmq::socket_type::rep);
-    pull_model_socket.bind("tcp://*:55555");
+    pull_model_socket.bind(fmt::format("tcp://*:{}", port));
 
     zmq::socket_t check_model_socket(ctx, zmq::socket_type::rep);
-    check_model_socket.bind("tcp://*:55556");
+    check_model_socket.bind(fmt::format("tcp://*:{}", port + 1));
 
     zmq::socket_t load_socket(ctx, zmq::socket_type::rep);
-    load_socket.bind("tcp://*:55557");
+    load_socket.bind(fmt::format("tcp://*:{}", port + 2));
 
     zmq::socket_t revert_socket(ctx, zmq::socket_type::rep);
-    revert_socket.bind("tcp://*:55558");
+    revert_socket.bind(fmt::format("tcp://*:{}", port + 3));
 
     zmq::socket_t reset_socket(ctx, zmq::socket_type::rep);
-    reset_socket.bind("tcp://*:55559");
+    reset_socket.bind(fmt::format("tcp://*:{}", port + 4));
 
-    zmq::pollitem_t items[] = {
-        {pull_model_socket, 0, ZMQ_POLLIN, 0},
-        {check_model_socket, 0, ZMQ_POLLIN, 0},
-        {load_socket, 0, ZMQ_POLLIN, 0},
-        {revert_socket, 0, ZMQ_POLLIN, 0},
-        {reset_socket, 0, ZMQ_POLLIN, 0},
-    };
+    zmq::socket_t pull_model_diffusion_socket(ctx, zmq::socket_type::rep);
+    pull_model_diffusion_socket.bind(fmt::format("tcp://*:{}", port + 5));
+
+    zmq::pollitem_t items[] = {{pull_model_socket, 0, ZMQ_POLLIN, 0},
+                               {check_model_socket, 0, ZMQ_POLLIN, 0},
+                               {load_socket, 0, ZMQ_POLLIN, 0},
+                               {revert_socket, 0, ZMQ_POLLIN, 0},
+                               {reset_socket, 0, ZMQ_POLLIN, 0},
+                               {pull_model_diffusion_socket, 0, ZMQ_POLLIN, 0}};
 
     while (running) {
-      zmq::poll(items, 5, std::chrono::milliseconds(-1));
+      zmq::poll(items, 6, std::chrono::milliseconds(-1));
 
       if (items[0].revents & ZMQ_POLLIN) {
         zmq::message_t msg;
@@ -169,6 +173,34 @@ public:
           spdlog::error("Receive Revert Tensor Req Failed");
         }
       }
+
+      if (items[5].revents & ZMQ_POLLIN) {
+        zmq::message_t msg;
+        auto result = pull_model_diffusion_socket.recv(msg);
+
+        if (result) {
+          spdlog::info("Pull model diffusion request");
+          PullModelDiffusionRequest req = json::parse(to_string(msg));
+          auto id = gen_sha256(req.file_names[0]);
+          (*task_map)[id] = false;
+          std::thread([req, id, this] {
+            for (const auto &file_name : req.file_names) {
+              auto dangertensor_index_name =
+                  gen_dangertensor_index_name(file_name, 1, 1);
+              engine_ptr->load_file_to_mem(file_name, 0,
+                                           dangertensor_index_name);
+            }
+            (*task_map)[id] = true;
+            // since we don't know the sequence ComfyUI loads these files
+          }).detach();
+
+          PullModelResponse resp{id};
+          auto reply = build_msg(resp);
+          pull_model_diffusion_socket.send(reply, zmq::send_flags::none);
+        } else {
+          spdlog::error("Receive Pull Model Diffusion Req Failed");
+        }
+      }
     }
   }
 
@@ -176,6 +208,7 @@ private:
   std::unique_ptr<blitz::BlitzEngine> engine_ptr;
   std::unique_ptr<std::map<std::string, bool>> task_map;
   std::map<std::string, std::pair<std::string, int>> task2_model_info;
+  int port;
   // std::atomic<int> load_revert_cnt = 0;
 };
 
@@ -208,6 +241,16 @@ int main(int argc, char *argv[]) {
       devices = parse_devices(argv[++i]);
     } else if (arg.rfind("--devices=", 0) == 0) {
       devices = parse_devices(arg.substr(10));
+    }
+
+    if (arg == "--port") {
+      // start port, default port is 55555
+      try {
+        auto start_port = stoi(argv[++i]);
+      } catch (const std::invalid_argument &) {
+        std::cerr << "Invalid port number: " << argv[i] << std::endl;
+        return 1;
+      }
     }
   }
 

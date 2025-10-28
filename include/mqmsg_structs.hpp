@@ -4,6 +4,7 @@
 #include <cuda_runtime_api.h>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <vector>
 
 using namespace std;
 using nlohmann::json;
@@ -17,6 +18,10 @@ struct PullModelRequest {
 
 struct PullModelResponse {
   string task_id;
+};
+
+struct PullModelDiffusionRequest {
+  std::vector<string> file_names; // diffusion only
 };
 
 struct CheckModelRequest {
@@ -71,6 +76,14 @@ inline void to_json(json &j, const PullModelRequest &r) {
            {"world_size", r.world_size},
            {"tp_size", r.tp_size},
            {"pp_size", r.pp_size}};
+}
+
+inline void from_json(const json &j, PullModelDiffusionRequest &r) {
+  j.at("file_names").get_to(r.file_names);
+}
+
+inline void to_json(json &j, const PullModelDiffusionRequest &r) {
+  j = json{{"file_names", r.file_names}};
 }
 
 inline void from_json(const json &j, PullModelResponse &r) {

@@ -36,15 +36,6 @@ def process_and_write_tensors(
     tp_size: int,
     stacked_params_mapping: List[tuple]
 ):
-    """
-    读取指定目录下所有 safetensors 文件，转置所有 2D 张量，并按指定顺序写入二进制文件。
-
-    Args:
-        directory (str): 包含 safetensors 文件的目录。
-        output_file (str): 输出二进制文件的路径。
-        tensor_order (list): 张量名称的顺序，用于写入文件。
-    """
-
     tensor_vec = []
     all_tensors = {}
     all_tensors_name = []
