@@ -41,7 +41,7 @@ BlitzLoad is a lightweight model checkpoint loading engine that minimizes the la
    ```
 5. Launch the Blitz engine prior to service startup:
    ```bash
-   ./build/mq_server
+   ./build/mq_server --devices <devices(e.g. 0,1,2,3)>
    ```
 6. Start vLLM (or another compatible runtime) configured to consume BlitzLoad weights. Reference `docs/examples.md` for the required patch and usage pattern.
 

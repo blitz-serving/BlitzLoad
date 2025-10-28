@@ -25,7 +25,7 @@ This page collects runnable examples that demonstrate how to pair BlitzLoad with
 
 3. **Start the Blitz engine (If not started)**
    ```bash
-   ./build/mq_server
+   ./build/mq_server --devices <devices(e.g. 0,1,2,3)>
    ```
 
 4. **Run offline inference**
@@ -40,13 +40,12 @@ This page collects runnable examples that demonstrate how to pair BlitzLoad with
 
 1. Start the Blitz engine if it is not already running:
    ```bash
-   ./build/mq_server
+   ./build/mq_server --devices <devices(e.g. 0,1,2,3)>
    ```
 2. Launch vLLM with DangerTensor weights:
    ```bash
    vllm serve <path-to-model> \
-     --tensor-parallel-size <tp-size> \
-     --blitzload-config /path/to/blitz_config.json
+     --tensor-parallel-size <tp-size>
    ```
 3. Exercise the endpoint using your preferred client (e.g., `curl`, `litellm`, or benchmarking tooling).
 
