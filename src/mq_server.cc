@@ -83,7 +83,7 @@ public:
                        req.world_size);
             auto danger_tensor_index_name =
                 gen_dangertensor_index_name(req.model_name, tp_size, pp_size);
-            engine_ptr->mem_to_buffer(danger_tensor_index_name, rank_num);
+            task2_model_info[id] = {danger_tensor_index_name, rank_num};
 
             (*task_map)[id] = true;
           }).detach();
@@ -103,6 +103,18 @@ public:
         if (result) {
           CheckModelRequest req = json::parse(to_string(msg));
           CheckModelResponse resp{(*task_map)[req.task_id]};
+          try {
+            if ((*task_map)[req.task_id] &&
+                task2_model_info.count(req.task_id)) {
+              auto [danger_tensor_index_name, rank_num] =
+                  task2_model_info[req.task_id];
+              engine_ptr->mem_to_buffer(danger_tensor_index_name, rank_num);
+              // to avoid re-trigger mem_to_buffer
+              task2_model_info.erase(req.task_id);
+            }
+          } catch (const std::exception &e) {
+            spdlog::error("Error in mem_to_buffer: {}", e.what());
+          }
           auto reply = build_msg(resp);
           check_model_socket.send(reply, zmq::send_flags::none);
         } else {
@@ -163,6 +175,7 @@ public:
 private:
   std::unique_ptr<blitz::BlitzEngine> engine_ptr;
   std::unique_ptr<std::map<std::string, bool>> task_map;
+  std::map<std::string, std::pair<std::string, int>> task2_model_info;
   // std::atomic<int> load_revert_cnt = 0;
 };
 

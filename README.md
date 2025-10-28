@@ -28,7 +28,7 @@ BlitzLoad is a lightweight model checkpoint loading engine that minimizes the la
    ```
 2. Build the C++ loading engine:
    ```bash
-   cmake -B build -DTORCH_CUDA_ARCH_LIST="9.0"
+   cmake -B build -DTORCH_CUDA_ARCH_LIST="machine-cuda-arch-list"
    cmake --build build -j
    ```
 3. Install the Python bindings alongside your serving stack:
@@ -41,7 +41,7 @@ BlitzLoad is a lightweight model checkpoint loading engine that minimizes the la
    ```
 5. Launch the Blitz engine prior to service startup:
    ```bash
-   ./build/mq_server --devices <devices(e.g. 0,1,2,3)>
+   ./build/mq_server --devices <devices(e.g. 0,1,2,3)> # A small segment of memory will be allocated on VRAM for data transfer
    ```
 6. Start vLLM (or another compatible runtime) configured to consume BlitzLoad weights. Reference `docs/examples.md` for the required patch and usage pattern.
 
