@@ -1,108 +1,66 @@
-# BlitzLoad
+# BlitzLoad:  Accelerate Large Model Cold Start
 
-**Accelerating Model Serving Cold Start**
+BlitzLoad is a lightweight model checkpoint loading engine that minimizes the latency of bringing large language models online. It loads model parameters from host DRAM, NVLink/RDMA peers, and local SSDs using a hierarchy-aware highly-optimized multicast plan (described in the BlitzScale system, see https://www.usenix.org/conference/osdi25/presentation/zhang-dingyan). More importantly, it can seamlessly integrate with existing inference stacks such as [vLLM](https://github.com/vllm-project/vllm) and initialize at scale with minimal changes.
 
-BlitzLoad is a lightweight library designed to **drastically reduce model cold start time** with the primary focus of reducing model weight reading time in large-scale inference systems. It is designed with a minimal API such that it can be seamlessly integrated into existing systems like [vLLM](https://github.com/vllm-project/vllm) to accelerate model loading and initialization, especially in distributed or multi-GPU environments.
+## Key Capabilities
+- ⚡ **Fast cold starts** through hierarchical weight placement and prefetch pipelines.
+- 🔗 **Engine-friendly integration** that keeps vLLM and similar runtimes unmodified.
+- 🔄 **Distributed aware** planning for both single-node multi-GPU and multi-node clusters.
 
-The key to fast model loading is leveraging hierarchical loading using a transfer-friendly format (that can be seamlessly converted from existing formats like SafeTensor). The supported parameter sources include host DRAM, RDMA+NVLink-linked DRAM, and SSD. Please refer to our paper for details on how we achieve the best possible loading time in various scenarios.
-
----
-
-* ⚡ **Fast LLM Serving Instance Cold Start**
-  Reduce model loading latency by leveraging a distributed model pool and underlying compute fabrics to efficiently allocate and load models across nodes.
-
-* 🔗 **Seamless Integration with major engines like vLLM**
-  Works as a drop-in enhancement — no need to modify vLLM’s core loading logic.
-
-* 🔄 **Distributed-Aware Design**
-  Supports both single-node multi-GPU and multi-node setups, accelerating model initialization across ranks.
-
-
-## Demo
+## Demo (Accelerate vLLM startup)
 <div align="center">
-<img src="./docs/blitzonvllm.gif" alt="raw vLLM v.s. blitz on vLLM"  height="400">
+<img src="./docs/blitzonvllm.gif" alt="BlitzLoad on top of vLLM" height="400">
 </div>
 
 ## Quick Start
 
-### Build Load Engine
+**1. Prerequisites**
 
-**prerequisite**
+- CUDA-capable GPUs (H100/H20 recommended) and NCCL-compatible fabric if running multi-node.
+- NVIDIA PyTorch container such as `nvcr.io/nvidia/pytorch:24.06-py3` or an equivalent environment (see `docs/use_nv_container.md`).
 
-We recommend to use NVIDIA's official containers, e.g., `nvcr.io/nvidia/pytorch:24.06-py3`, and a step-by-step instruction can be found at [use_nv_container](https://github.com/blitz-serving/BlitzLoad/blob/main/docs/use_nv_container.md). 
+**2. Steps**
 
-**lib-blitz**
+1. Clone the repo, initialize submodules, and enter the workspace:
+   ```bash
+   git clone --recursive https://github.com/blitz-serving/BlitzLoad.git
+   cd BlitzLoad
+   ```
+2. Build the C++ loading engine:
+   ```bash
+   cmake -B build -DTORCH_CUDA_ARCH_LIST="machine-cuda-arch-list"
+   cmake --build build -j
+   ```
+3. Install the Python bindings alongside your serving stack:
+   ```bash
+   pip install -e blitz_lib
+   ```
+4. Convert model weights you want to accelerate to the BlitzLoad DangerTensor format (see `docs/examples.md` for detailed guidance):
+   ```bash
+   python -m utils.make_dangertensor --model-path <model> --output-path <output> --tp-size <tp>
+   ```
+5. Launch the Blitz engine prior to service startup:
+   ```bash
+   ./build/mq_server --devices <devices(e.g. 0,1,2,3)> # A small segment of memory will be allocated on VRAM for data transfer
+   ```
+6. Start vLLM (or another compatible runtime) configured to consume BlitzLoad weights. Reference `docs/examples.md` for the required patch and differnt usage patterns. 
 
-```bash
-git clone --recursive https://github.com/blitz-serving/BlitzLoad.git
-cmake -Bbuild -DTORCH_CUDA_ARCH_LIST="9.0" # for h100/h20
-cmake --build ./build -j
-```
-
-**danger_tensor**: for each model, we should convert safetensor files into dangertensor files, to enable our engine to load model from local-ssd
-
-```bash
-# Add model stacked_param_mapping config to utils/models directory, you can find mapping config from vllm
-# e.g. add qwen2.5-vl config: open vllm/model_executor/models/qwen2_5_vl.py and find stacked_param_mapping, add the corresponding file in `utils/models` directory
-python -m utils.make_dangertensor --model-path <model-path> --output-path <output-path> --tp-size <tp-size>
-```
-
-**py-blitz-lib**
-
-blitz_lib python package should be installed in the same env with vllm
-
-```bash
-cd blitz_lib && pip install -e .
-```
-
-**RUN BLITZ_ENGINE**
-```bash
-# in directory lib-blitz-scale
-./build/mq_server
-```
-
-### Testing with vLLM
-
-- Install editable vLLM, refer to [vllm_doc](https://docs.vllm.ai/en/v0.9.2/getting_started/installation/gpu.html#build-wheel-from-source), you can checkout from commit ab9f2cfd1942f7ddfee658ce86ea96b4789862af
-
-
-**Modifies in vLLM code**
-
-from commit ab9f2cfd1942f7ddfee658ce86ea96b4789862af apply changes.patch
-
-```bash
-# in vllm directory
-git checkout -b blitz ab9f2cfd1942f7ddfee658ce86ea96b4789862af
-git apply path-to-changes.patch
-```
-
-**RUN ONLINE SERVING**
-
-```bash
-# start blitz_engine before run inference test, see RUN BLITZ_ENGINE section
-vllm serve <path-to-model> (--tensor-parallel-size <tp-size>)
-```
-
-**RUN OFFLINE INFER TEST**
-
-We provide a testing script at [offline_infer.py](https://github.com/blitz-serving/BlitzLoad/blob/main/examples/offline_infer.py), where vLLM loads model weight via BlitzLoad first and then performs offline inference.
-
-```bash
-# start blitz_engine before run inference test, see RUN BLITZ_ENGINE section
-python offline_infer.py
-```
+## Documentation
+- `docs/examples.md` — detailed examples for running offline inference and integrating with vLLM.
+- `docs/use_nv_container.md` — recommended NVIDIA container workflow.
 
 ## Roadmap
-- Features (original implementation in https://github.com/blitz-serving/blitz-scale)
-  - [ ] Port scale-up/scale-out hybrid bandwidth aggregation
-  - [ ] Supporting controller to generate distributed load plan within cluster online   
-
-- Integration to serving ecosystem
-  - [ ] Co-design with model switch mechanism to further minimize the engine' control plane overhead, e,g, [kvcached](https://github.com/ovg-project/kvcached)
+- Features (port implementation from https://github.com/blitz-serving/blitz-scale)
+  - [ ] Port RDMA/NVLink hybrid bandwidth aggregation.
+  - [ ] Add a controller that generates cluster-wide load plans online.
+- Serving Ecosystem
+  - [ ] Co-design with model switch control planes (e.g., [kvcached](https://github.com/ovg-project/kvcached)) to eliminate the overhead of engine's control plane. 
+  - [ ] Integrate with SGLang.
+- More application scenarios 
+  - [ ] Examples in supporting checkpoint read in post-training. 
 
 ## Citation
-
-If you like BlitzLoad, please cite our paper:
+If you use BlitzLoad in your work, please cite:
 
 ```bibTex
 @inproceedings{10.5555/3767901.3767917,
