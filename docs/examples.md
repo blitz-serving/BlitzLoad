@@ -32,7 +32,8 @@ This page collects runnable examples that demonstrate how to pair BlitzLoad with
    - Ensure the Blitz engine stays running.
    - Execute the example script from the repository root:
      ```bash
-     python examples/offline_infer.py
+     python examples/prepare.py # Load model weights from local SSD to DRAM
+     python examples/offline_infer.py # Transfer the parameters from DRAM to the VRAM registered by the engine, and finally load them into vLLM.
      ```
    - The script first loads weights through BlitzLoad and then evaluates a batch of prompts with vLLM.
 
@@ -44,6 +45,7 @@ This page collects runnable examples that demonstrate how to pair BlitzLoad with
    ```
 2. Launch vLLM with DangerTensor weights:
    ```bash
+   python examples/prepare.py # Load model weights from local SSD to DRAM
    vllm serve <path-to-model> \
      --tensor-parallel-size <tp-size>
    ```
