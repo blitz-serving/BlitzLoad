@@ -7,7 +7,7 @@ BlitzLoad is a lightweight model checkpoint loading engine that minimizes the la
 - 🔗 **Engine-friendly integration** that keeps vLLM and similar runtimes unmodified.
 - 🔄 **Distributed aware** planning for both single-node multi-GPU and multi-node clusters.
 
-## Demo
+## Demo (Accelerate vLLM startup)
 <div align="center">
 <img src="./docs/blitzonvllm.gif" alt="BlitzLoad on top of vLLM" height="400">
 </div>
@@ -43,7 +43,7 @@ BlitzLoad is a lightweight model checkpoint loading engine that minimizes the la
    ```bash
    ./build/mq_server --devices <devices(e.g. 0,1,2,3)> # A small segment of memory will be allocated on VRAM for data transfer
    ```
-6. Start vLLM (or another compatible runtime) configured to consume BlitzLoad weights. Reference `docs/examples.md` for the required patch and usage pattern.
+6. Start vLLM (or another compatible runtime) configured to consume BlitzLoad weights. Reference `docs/examples.md` for the required patch and differnt usage patterns. 
 
 ## Documentation
 - `docs/examples.md` — detailed examples for running offline inference and integrating with vLLM.
