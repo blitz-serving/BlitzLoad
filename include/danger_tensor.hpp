@@ -9,6 +9,8 @@
 #include <map>
 #include <mutex>
 #include <spdlog/spdlog.h>
+#include <sstream>
+#include <utility>
 #include <vector>
 
 #include <cerrno>
@@ -19,10 +21,13 @@
 #include <cuda_runtime.h>
 #include <fcntl.h>
 #include <logger.h>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+using nlohmann::json;
 
 namespace blitz::dangertensor {
 
@@ -31,8 +36,28 @@ static const size_t ALIGN = 4096;
 struct MetaData {
   uint64_t offset;
   uint64_t data_length;
+  std::string shape = "";
   std::string name = "";
+  std::string dtype = "";
+
+  MetaData() = default;
 };
+
+inline void from_json(const json &j, blitz::dangertensor::MetaData &r) {
+  j.at("offset").get_to(r.offset);
+  j.at("data_length").get_to(r.data_length);
+  j.at("shape").get_to(r.shape);
+  j.at("name").get_to(r.name);
+  j.at("dtype").get_to(r.dtype);
+}
+
+inline void to_json(json &j, const blitz::dangertensor::MetaData &r) {
+  j = json{{"offset", r.offset},
+           {"data_length", r.data_length},
+           {"shape", r.shape},
+           {"name", r.name},
+           {"dtype", r.dtype}};
+}
 
 /// One dangertensor file pair -> one DangerTensor object.
 ///
@@ -54,9 +79,18 @@ public:
     for (int i = 0; i < tensor_num; i++) {
       std::string tensor_name;
       uint64_t data_length;
-      f >> tensor_name >> data_length;
-      metas_vec[i] = {danger_tensor_file_size, data_length, tensor_name};
+      std::string shape;
+      std::string dtype;
+      f >> tensor_name >> data_length >> shape >> dtype;
+      metas_vec[i] = {danger_tensor_file_size, data_length, shape, tensor_name,
+                      dtype};
       danger_tensor_file_size += data_length;
+    }
+    if (!f.eof()) {
+      spdlog::info("Load metadata of safetensors file before eof");
+      std::ostringstream oss;
+      oss << f.rdbuf();
+      this->safetensor_meta = oss.str();
     }
     spdlog::info("Load file {} done, tensor num: {}", danger_meta_path,
                  tensor_num);
@@ -76,19 +110,22 @@ public:
     fstat(fd, &st);
     const size_t file_size = st.st_size;
     CUDA_CHECK(cudaMallocHost(&host_weight_segment, file_size));
-    spdlog::info("Data file size: {}bytes, host weight segment: {:x}",
-                 file_size, host_weight_segment);
+    spdlog::info("Data file size: 0x{:x} bytes", file_size);
 
     auto start = std::chrono::high_resolution_clock::now();
 
     std::vector<std::future<int>> as;
     size_t total_chunks =
         (file_size + chunk_size_in_bytes - 1) / chunk_size_in_bytes;
-    size_t chunk_per_thrd = (total_chunks + nthreads - 1) / nthreads;
-    for (size_t i = 0; i < nthreads; ++i) {
+    int tmp_nthreads = nthreads;
+    if (tmp_nthreads > total_chunks) {
+      tmp_nthreads = total_chunks;
+    }
+    size_t chunk_per_thrd = (total_chunks + tmp_nthreads - 1) / tmp_nthreads;
+    for (size_t i = 0; i < tmp_nthreads; ++i) {
       size_t partition_offset = i * chunk_per_thrd * chunk_size_in_bytes;
-      if (i == nthreads - 1) {
-        chunk_per_thrd = total_chunks - (nthreads - 2) * chunk_per_thrd;
+      if (i == tmp_nthreads - 1) {
+        chunk_per_thrd = total_chunks - (tmp_nthreads - 2) * chunk_per_thrd;
       }
 
       as.emplace_back(
@@ -107,9 +144,9 @@ public:
                               offset, offset + nbytes, errno, strerror(errno));
                 return -1;
               } else if ((size_t)bytes_read != nbytes) {
-                spdlog::error(
-                    "Read chunk [{:x},{:x}] for {} bytes, but read {} bytes",
-                    offset, offset + nbytes, nbytes, bytes_read);
+                spdlog::error("Read chunk [0x{:x},0x{:x}] for {} bytes, but "
+                              "read {} bytes",
+                              offset, offset + nbytes, nbytes, bytes_read);
                 return -2;
               }
 
@@ -120,7 +157,8 @@ public:
     }
 
     for (auto &a : as) {
-      a.wait();
+      // a.wait();
+      a.get();
     }
 
     auto stop = std::chrono::high_resolution_clock::now();
@@ -136,9 +174,9 @@ public:
   }
 
   /// load weights from host-mem to device-mem
-  std::tuple<size_t, std::vector<size_t>, bool>
-  mem_to_buffer(void *buffer_ptr, size_t buffer_size, size_t buffer_read_size,
-                int buffer_idx, int device) {
+  std::tuple<size_t, bool> mem_to_buffer(void *buffer_ptr, size_t buffer_size,
+                                         size_t buffer_read_size,
+                                         int buffer_idx, int device) {
     LOG_ASSERT(valid, "File hasn't been loaded");
     auto it = std::upper_bound(
         metas_vec.begin(), metas_vec.end(), buffer_read_size,
@@ -148,14 +186,12 @@ public:
 
     size_t loaded_size = 0, start_offset = buffer_read_size,
            first_tensor_offset = buffer_read_size - it->offset;
-    std::vector<size_t> loaded_sizes;
     while (it != metas_vec.end() &&
            loaded_size + it->data_length - first_tensor_offset <= buffer_size) {
       auto ls = it->data_length - first_tensor_offset;
       __nv_bfloat16 *val =
           (__nv_bfloat16 *)(host_weight_segment + start_offset + loaded_size);
       loaded_size += ls;
-      loaded_sizes.push_back(ls);
       first_tensor_offset = 0;
       spdlog::info(
           "[Buffer {}:{}] Loading {}, tensor_size 0x{:x}, cum_size 0x{:x}",
@@ -172,14 +208,16 @@ public:
                    device, buffer_idx, it->name, __bfloat162float(*val),
                    __bfloat162float(*(val + 1)), __bfloat162float(*(val + 2)));
       loaded_size = buffer_size;
-      loaded_sizes.push_back(buffer_size);
     }
     // spdlog::info("load size: 0x{:x}:0x{:x}, read done: {}", loaded_size,
     //              buffer_size, it == metas_vec.end());
     CUDA_CHECK(cudaMemcpyAsync(buffer_ptr, host_weight_segment + start_offset,
                                loaded_size, cudaMemcpyHostToDevice, 0));
-    return {loaded_size, loaded_sizes, it == metas_vec.end()};
+    return {loaded_size, it == metas_vec.end()};
   }
+  std::string get_meta() { return this->safetensor_meta; }
+
+  std::vector<MetaData> get_meta_tensors() { return this->metas_vec; }
 
 private:
   ssize_t pread_aligned(int fd, void *buf, size_t nbytes, off_t offset,
@@ -227,6 +265,7 @@ private:
   const size_t chunk_size_in_bytes;
   char *host_weight_segment = nullptr;
   std::atomic<bool> valid = false;
+  std::string safetensor_meta;
 };
 
 } // namespace blitz::dangertensor

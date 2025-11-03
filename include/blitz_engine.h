@@ -17,6 +17,10 @@ public:
   ~BlitzEngine();
 
   int pull_model(std::string model_name_or_path, int tp_size, int pp_size);
+  void export_meta(std::string danger_tensor_index_name, int rank_num,
+                   std::string &meta_str);
+  std::vector<dangertensor::MetaData>
+  export_meta_tensors(std::string danger_tensor_index_name, int rank_num);
   void load_file_to_mem(std::string file_name, int rank,
                         std::string danger_tensor_index);
   void mem_to_tensor(cudaIpcMemHandle_t &handle, std::string tensor_name,

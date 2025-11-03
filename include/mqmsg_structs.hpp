@@ -1,4 +1,5 @@
 #pragma once
+#include "danger_tensor.hpp"
 #include <array>
 #include <cstdint>
 #include <cuda_runtime_api.h>
@@ -20,8 +21,8 @@ struct PullModelResponse {
   string task_id;
 };
 
-struct PullModelDiffusionRequest {
-  std::vector<string> file_names; // diffusion only
+struct PullDiffusionModelRequest {
+  string file_name;
 };
 
 struct CheckModelRequest {
@@ -56,6 +57,22 @@ struct RevertHandlerResponse {
   bool success;
 };
 
+struct GetMetaRequest {
+  string file_name;
+};
+
+struct GetMetaResponse {
+  string meta_str;
+};
+
+struct GetMetaTensorRequest {
+  string file_name;
+};
+
+struct GetMetaTensorResponse {
+  std::vector<blitz::dangertensor::MetaData> meta_tensors;
+};
+
 struct ResetStatusRequest {
   int rank;
 };
@@ -63,6 +80,38 @@ struct ResetStatusRequest {
 struct EmptyRequestResponse {};
 
 // ------------------- JSON -------------------
+
+inline void from_json(const json &j, GetMetaRequest &r) {
+  j.at("file_name").get_to(r.file_name);
+}
+
+inline void to_json(json &j, const GetMetaRequest &r) {
+  j = json{{"file_name", r.file_name}};
+}
+
+inline void from_json(const json &j, GetMetaResponse &r) {
+  j.at("meta_str").get_to(r.meta_str);
+}
+
+inline void to_json(json &j, const GetMetaResponse &r) {
+  j = json{{"meta_str", r.meta_str}};
+}
+
+inline void from_json(const json &j, GetMetaTensorRequest &r) {
+  j.at("file_name").get_to(r.file_name);
+}
+
+inline void to_json(json &j, const GetMetaTensorRequest &r) {
+  j = json{{"file_name", r.file_name}};
+}
+
+inline void from_json(const json &j, GetMetaTensorResponse &r) {
+  j.at("meta_tensors").get_to(r.meta_tensors);
+}
+
+inline void to_json(json &j, const GetMetaTensorResponse &r) {
+  j = json{{"meta_tensors", r.meta_tensors}};
+}
 
 inline void from_json(const json &j, PullModelRequest &r) {
   j.at("model_name").get_to(r.model_name);
@@ -78,12 +127,14 @@ inline void to_json(json &j, const PullModelRequest &r) {
            {"pp_size", r.pp_size}};
 }
 
-inline void from_json(const json &j, PullModelDiffusionRequest &r) {
-  j.at("file_names").get_to(r.file_names);
+inline void from_json(const json &j, PullDiffusionModelRequest &r) {
+  // j.at("file_names").get_to(r.file_names);
+  j.at("file_name").get_to(r.file_name);
 }
 
-inline void to_json(json &j, const PullModelDiffusionRequest &r) {
-  j = json{{"file_names", r.file_names}};
+inline void to_json(json &j, const PullDiffusionModelRequest &r) {
+  // j = json{{"file_names", r.file_names}};
+  j = json{{"file_name", r.file_name}};
 }
 
 inline void from_json(const json &j, PullModelResponse &r) {

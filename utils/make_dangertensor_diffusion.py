@@ -21,13 +21,24 @@ for filename in filenames:
     tensor_vec = []
 
     with safe_open(filename, framework="pt") as f:
+        meta = f.metadata()
+        # print(meta)
+
         output_path = filename.replace(".safetensors", ".dangertensors")
-        output_meta = output_path + ".meta"
+        output_meta = filename.replace(".safetensors", ".meta")
+        # output_meta = output_path + ".meta"
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         with open(output_path, "wb") as ff:
             for name in f.keys():
                 tensor = f.get_tensor(name)
-                tensor_vec.append((name, tensor.element_size() * tensor.nelement()))
+                tensor_vec.append(
+                    (
+                        name,
+                        tensor.element_size() * tensor.nelement(),
+                        tensor.shape,
+                        str(tensor.dtype),
+                    )
+                )
                 try:
                     uint8_tensor = tensor.view(torch.uint8)
                 except Exception:
@@ -39,8 +50,11 @@ for filename in filenames:
                 ff.write(bytes_data)
     with open(output_meta, "w") as fff:
         fff.write(f"{len(tensor_vec)}\n")
-        for name, size in tensor_vec:
-            fff.write(f"{name} {size}\n")
+        for name, size, shape, dtype in tensor_vec:
+            # delete space in shape
+            shape = re.sub(r"\s+", "", str(shape))
+            fff.write(f"{name} {size} {shape} {dtype}\n")
+        fff.write(str(meta))
 
 # for name in all_tensors_name:
 #     tensor = all_tensors[name]

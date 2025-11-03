@@ -6,17 +6,13 @@
 #include <chrono>
 #include <common_tools.hpp>
 #include <cstddef>
-#include <cstdint>
 #include <cstdlib>
-#include <filesystem>
-#include <iomanip>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <mqmsg_structs.hpp>
 #include <nlohmann/json.hpp>
 #include <openssl/sha.h>
-#include <regex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -59,15 +55,23 @@ public:
     zmq::socket_t pull_model_diffusion_socket(ctx, zmq::socket_type::rep);
     pull_model_diffusion_socket.bind(fmt::format("tcp://*:{}", port + 5));
 
+    zmq::socket_t meta_socket(ctx, zmq::socket_type::rep);
+    meta_socket.bind(fmt::format("tcp://*:{}", port + 6));
+
+    zmq::socket_t meta_tensor_socket(ctx, zmq::socket_type::rep);
+    meta_tensor_socket.bind(fmt::format("tcp://*:{}", port + 7));
+
     zmq::pollitem_t items[] = {{pull_model_socket, 0, ZMQ_POLLIN, 0},
                                {check_model_socket, 0, ZMQ_POLLIN, 0},
                                {load_socket, 0, ZMQ_POLLIN, 0},
                                {revert_socket, 0, ZMQ_POLLIN, 0},
                                {reset_socket, 0, ZMQ_POLLIN, 0},
-                               {pull_model_diffusion_socket, 0, ZMQ_POLLIN, 0}};
+                               {pull_model_diffusion_socket, 0, ZMQ_POLLIN, 0},
+                               {meta_socket, 0, ZMQ_POLLIN, 0},
+                               {meta_tensor_socket, 0, ZMQ_POLLIN, 0}};
 
     while (running) {
-      zmq::poll(items, 6, std::chrono::milliseconds(-1));
+      zmq::poll(items, 8, std::chrono::milliseconds(-1));
 
       if (items[0].revents & ZMQ_POLLIN) {
         zmq::message_t msg;
@@ -114,7 +118,7 @@ public:
                   task2_model_info[req.task_id];
               engine_ptr->mem_to_buffer(danger_tensor_index_name, rank_num);
               // to avoid re-trigger mem_to_buffer
-              task2_model_info.erase(req.task_id);
+              // task2_model_info.erase(req.task_id);
             }
           } catch (const std::exception &e) {
             spdlog::error("Error in mem_to_buffer: {}", e.what());
@@ -180,18 +184,16 @@ public:
 
         if (result) {
           spdlog::info("Pull model diffusion request");
-          PullModelDiffusionRequest req = json::parse(to_string(msg));
-          auto id = gen_sha256(req.file_names[0]);
+          PullDiffusionModelRequest req = json::parse(to_string(msg));
+          auto id = gen_sha256(req.file_name);
           (*task_map)[id] = false;
           std::thread([req, id, this] {
-            for (const auto &file_name : req.file_names) {
-              auto dangertensor_index_name =
-                  gen_dangertensor_index_name(file_name, 1, 1);
-              engine_ptr->load_file_to_mem(file_name, 0,
-                                           dangertensor_index_name);
-            }
+            auto dangertensor_index_name =
+                gen_dangertensor_index_name(req.file_name, 1, 1);
+            task2_model_info[id] = {dangertensor_index_name, 1};
+            engine_ptr->load_file_to_mem(req.file_name, 0,
+                                         dangertensor_index_name);
             (*task_map)[id] = true;
-            // since we don't know the sequence ComfyUI loads these files
           }).detach();
 
           PullModelResponse resp{id};
@@ -199,6 +201,43 @@ public:
           pull_model_diffusion_socket.send(reply, zmq::send_flags::none);
         } else {
           spdlog::error("Receive Pull Model Diffusion Req Failed");
+        }
+      }
+      if (items[6].revents & ZMQ_POLLIN) {
+        zmq::message_t msg;
+        auto result = meta_socket.recv(msg);
+
+        if (result) {
+          spdlog::info("Meta Info request");
+          GetMetaRequest req = json::parse(to_string(msg));
+          auto dangertensor_index_name =
+              gen_dangertensor_index_name(req.file_name, 1, 1);
+          std::string meta_str = "";
+          engine_ptr->export_meta(dangertensor_index_name, 1, meta_str);
+          GetMetaResponse resp{meta_str};
+          auto reply = build_msg(resp);
+          meta_socket.send(reply, zmq::send_flags::none);
+        } else {
+          spdlog::error("Receive Meta Req Failed");
+        }
+      }
+
+      if (items[7].revents & ZMQ_POLLIN) {
+        zmq::message_t msg;
+        auto result = meta_tensor_socket.recv(msg);
+
+        if (result) {
+          spdlog::info("Meta tensor request");
+          GetMetaTensorRequest req = json::parse(to_string(msg));
+          auto dangertensor_index_name =
+              gen_dangertensor_index_name(req.file_name, 1, 1);
+          auto meta_tensors =
+              engine_ptr->export_meta_tensors(dangertensor_index_name, 1);
+          GetMetaTensorResponse resp{meta_tensors};
+          auto reply = build_msg(resp);
+          meta_tensor_socket.send(reply, zmq::send_flags::none);
+        } else {
+          spdlog::error("Receive Meta Tensor Req Failed");
         }
       }
     }
@@ -229,6 +268,7 @@ std::vector<int> parse_devices(const std::string &devices_str) {
 
 int main(int argc, char *argv[]) {
   std::vector<int> devices;
+  int port = 55555;
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
 
@@ -246,7 +286,7 @@ int main(int argc, char *argv[]) {
     if (arg == "--port") {
       // start port, default port is 55555
       try {
-        auto start_port = stoi(argv[++i]);
+        port = stoi(argv[++i]);
       } catch (const std::invalid_argument &) {
         std::cerr << "Invalid port number: " << argv[i] << std::endl;
         return 1;
@@ -259,7 +299,7 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
-  auto server = Mq_Server(devices, 512 * 1024 * 1024);
+  auto server = Mq_Server(devices, 512 * 1024 * 1024, port);
   server.run();
   return 0;
 }
