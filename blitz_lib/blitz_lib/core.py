@@ -20,7 +20,7 @@ from threading import Lock
 
 CUDA_IPC_HANDLE_SIZE = 64
 LIB_TIME = 0
-PORT = 35555
+PORT = 45555
 SHM_NAME = "task_id_test"
 HEADER_SIZE = 8
 
@@ -48,6 +48,16 @@ server_addr_map = {
     "pull_diffusion_model": f"tcp://localhost:{PORT + 5}",
     "load_meta": f"tcp://localhost:{PORT + 6}",
     "load_tensor_meta": f"tcp://localhost:{PORT + 7}",
+}
+
+dtype_map = {
+    "torch.float32": torch.float32,
+    "torch.float": torch.float32,
+    "torch.float16": torch.float16,
+    "torch.bfloat16": torch.bfloat16,
+    "torch.int64": torch.int64,
+    "torch.int32": torch.int32,
+    "torch.float8_e4m3fn": torch.float8_e4m3fn,
 }
 
 # 需要清除的代理环境变量列表
@@ -93,6 +103,11 @@ def register_rank(rank: int):
 def get_rank():
     proc_id = os.getpid()
     return _rank_info[proc_id]
+
+
+def _parse_shape(shape_str: str):
+    s = shape_str[shape_str.find("[") + 1 : shape_str.find("]")]
+    return tuple(map(int, s.split(",")))
 
 
 class CudaMemManager:
@@ -176,13 +191,11 @@ def load_tensor(param: torch.Tensor, weight_name: str):
     socket_revert = _get_socket(server_addr_map["revert_handler"])
     # rank = _rank_info[os.getpid()]
     tensor_size = param.element_size() * param.nelement()
-    print(f"Loading Tensor {weight_name}...")
     while loaded_bytes < tensor_size:
         req = mq_types.LoadTensorRequest(
             tensor_name=weight_name, tensor_size=tensor_size - loaded_bytes, rank=0
         )
         resp_dict = _send_recv(socket_load, req)
-        print("Receive load tensor response")
         resp = mq_types.LoadTensorResponse(
             resp_dict["handler"],
             resp_dict["offset"],
@@ -223,7 +236,9 @@ def pull_model(model_name: str, world_size: int, tp_size: int, pp_size: int):
 
 def pull_diffusion_model(directory: str):
     # walk through the directory to get all file names
+    register_rank(0)
     file_names = recursive_walk_through_directory(directory)
+    print(file_names)
 
     shm = shared_memory.SharedMemory(name=SHM_NAME, create=True, size=1024 * 1024)
     d = {}
@@ -297,12 +312,6 @@ def recursive_walk_through_directory(directory: str):
                 meta_path = file_path.replace(".dangertensors", ".meta")
                 if os.path.exists(meta_path):
                     file_names.append(file_path)
-
-        for dir in dirs:
-            dir_path = os.path.join(root, dir)
-            # recursively walk through subdirectories
-            sub_file_names = recursive_walk_through_directory(dir_path)
-            file_names.extend(sub_file_names)
     return file_names
 
 
@@ -364,24 +373,16 @@ def comfyui_hook(func):
                 time.sleep(0.1)
 
         print(f"Loading dangertensor from {ckpt_file} to device {device}")
-
         sd = {}
 
         tensor_name_vec = _load_tensor_meta(file_name=ckpt_file)
         print(tensor_name_vec[0])
         for item in tensor_name_vec:  # datalength = nele * ele_size
-            # create tensor
-            # print(item)
-            # raise(NotImplementedError)
             name = item['name']
             shape = item['shape']
-            shape = ast.literal_eval(shape.replace("torch.Size", ""))
-            dtype_str = item['dtype']
-            print(f"{name}: {shape}, {dtype_str}, device={device}")
-            # if device is None:
-            #     device = torch.device("cpu")
-            dtype = getattr(torch, dtype_str.split('.')[1])
-            tensor = torch.empty(size=torch.Size(shape), dtype=dtype).cuda()
+            shape = _parse_shape(shape)
+            dtype = dtype_map[item["dtype"]]
+            tensor = torch.empty(size=torch.Size(shape), dtype=dtype, device='cuda:0')
             load_tensor(tensor, name)
             sd[name] = tensor
 
@@ -389,6 +390,9 @@ def comfyui_hook(func):
             safetensor_file_meta = load_meta(file_name=ckpt_file)
         else:
             safetensor_file_meta = None
+
+        # send reset status
+        reset_status()
 
         return (sd, safetensor_file_meta) if return_meta else sd
 
