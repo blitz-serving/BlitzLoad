@@ -116,9 +116,11 @@ public:
                 task2_model_info.count(req.task_id)) {
               auto [danger_tensor_index_name, rank_num] =
                   task2_model_info[req.task_id];
+              spdlog::info("Trigger mem_to_buffer of {}",
+                           danger_tensor_index_name);
               engine_ptr->mem_to_buffer(danger_tensor_index_name, rank_num);
               // to avoid re-trigger mem_to_buffer
-              // task2_model_info.erase(req.task_id);
+              task2_model_info.erase(req.task_id);
             }
           } catch (const std::exception &e) {
             spdlog::error("Error in mem_to_buffer: {}", e.what());

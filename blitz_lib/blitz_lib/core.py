@@ -176,6 +176,7 @@ def load_tensor(param: torch.Tensor, weight_name: str):
     socket_revert = _get_socket(server_addr_map["revert_handler"])
     # rank = _rank_info[os.getpid()]
     tensor_size = param.element_size() * param.nelement()
+    print(f"Loading Tensor {weight_name}...")
     while loaded_bytes < tensor_size:
         req = mq_types.LoadTensorRequest(
             tensor_name=weight_name, tensor_size=tensor_size - loaded_bytes, rank=0
@@ -253,7 +254,7 @@ def check_model(model_name: str) -> bool:
     b = shm.buf[int(HEADER_SIZE): int(HEADER_SIZE) + payload_size].tobytes()
     d = json.loads(b)
 
-    task_id = d.get("model_name", "")
+    task_id = d.get(model_name, "")
     req = mq_types.CheckModelRequest(model_name=model_name, task_id=task_id)
     resp_dict = _send_recv(socket, req)
     return resp_dict["done"]
@@ -352,12 +353,15 @@ def comfyui_hook(func):
         bound.apply_defaults()
 
         # ckpt, safe_load=False, device=None, return_metadata=False
-        param_names = list(sig.parameters.keys())
         ckpt_file = bound.arguments.get('ckpt')
         ckpt_file = ckpt_file.replace(".safetensors", ".dangertensors")
         device = bound.arguments.get('device', None)
         return_meta = bound.arguments.get('return_metadata', False)
-        check_model(ckpt_file)
+        while True:
+            if check_model(ckpt_file):
+                break
+            else:
+                time.sleep(0.1)
 
         print(f"Loading dangertensor from {ckpt_file} to device {device}")
 
