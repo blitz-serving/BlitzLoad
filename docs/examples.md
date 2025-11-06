@@ -6,11 +6,10 @@ This page collects runnable examples that demonstrate how to use BlitzLoad to ac
 
 1. **Prepare vLLM**
    
+   - Checkout to commit `ab9f2c` (tested baseline).
    - Install vLLM from source following the [official instructions](https://docs.vllm.ai/en/v0.9.2/getting_started/installation/gpu.html#build-wheel-from-source).
-   - Checkout commit `ab9f2cfd1942f7ddfee658ce86ea96b4789862af` (tested baseline).
    - Apply the BlitzLoad integration patch:
      ```bash
-     git checkout -b blitz ab9f2cfd1942f7ddfee658ce86ea96b4789862af
      git apply /path/to/BlitzLoad/changes.patch
      ```
    
