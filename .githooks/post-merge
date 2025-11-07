@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -e
+
+branch=$(git rev-parse --abbrev-ref HEAD)
+if [ "$branch" != "main" ]; then
+    exit 0
+fi
+
+echo "✅ main updated, ready to push to all remotes..."
+
+remotes=$(git remote)
+
+for remote in $remotes; do
+    echo "🚀 Pushing to : $remote"
+    git push "$remote" main || echo "⚠️ Faile to push to $remote"
+done
+
+echo "🎉 Push to all remotes successfully"
+
