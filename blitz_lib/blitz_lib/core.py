@@ -17,7 +17,7 @@ from threading import Lock
 
 CUDA_IPC_HANDLE_SIZE = 64
 LIB_TIME = 0
-PORT = 45555
+PORT = 55555
 SHM_NAME = "task_id_test"
 HEADER_SIZE = 8
 MAX_BATCH_BYTES = 512 * 1024 * 1024

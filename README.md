@@ -35,18 +35,20 @@ BlitzLoad is a lightweight model checkpoint loading engine that minimizes the la
    ```bash
    pip install -e blitz_lib
    ```
-4. Convert model weights you want to accelerate to the BlitzLoad DangerTensor format (see `docs/examples.md` for detailed guidance):
+4. Convert model weights you want to accelerate to the BlitzLoad DangerTensor format (see `docs/vllm.md` and `docs/comfyui.md` for detailed guidance):
    ```bash
-   python -m utils.make_dangertensor --model-path <model> --output-path <output> --tp-size <tp>
+   python -m utils.make_dangertensor --model-path <model> --output-path <output> --tp-size <tp> # vllm
+   python -m utils.make_dangertensor_diffusion --models-path <models-path> #comfyui
    ```
 5. Launch the Blitz engine prior to service startup:
    ```bash
    ./build/mq_server --devices <devices(e.g. 0,1,2,3)> # A small segment of memory will be allocated on VRAM for data transfer
    ```
-6. Start vLLM (or another compatible runtime) configured to consume BlitzLoad weights. Reference `docs/examples.md` for the required patch and differnt usage patterns. 
+6. Start vLLM (or another compatible runtime) configured to consume BlitzLoad weights. Reference `docs/vllm.md` and `docs/comfyui.md` for the required patch and differnt usage patterns. 
 
 ## Documentation
-- `docs/examples.md` — detailed examples for running offline inference and integrating with vLLM.
+- `docs/vllm.md` — detailed examples for running offline inference and integrating with vLLM.
+- `docs/comfyui.md` - detailed examples for running offline inference and integrating with ComfyUI.
 - `docs/use_nv_container.md` — recommended NVIDIA container workflow.
 
 ## Roadmap

@@ -1,4 +1,4 @@
-# BlitzLoad Examples
+# BlitzLoad vLLM Examples
 
 This page collects runnable examples that demonstrate how to use BlitzLoad to accelerate startup of a serving instance on engines like vLLM. 
 
@@ -32,7 +32,7 @@ This page collects runnable examples that demonstrate how to use BlitzLoad to ac
 4. Launch vLLM with DangerTensor weights:
 
    ```bash
-   python examples/prepare.py <model-path> <tp-size> # Load model weights from local SSD to host DRAM
+   python examples/prepare_vllm.py <model-path> <tp-size> # Load model weights from local SSD to host DRAM
    vllm serve <path-to-model> \
      --tensor-parallel-size <tp-size>
    ```
@@ -85,7 +85,7 @@ TBD
    - Ensure the Blitz engine stays running.
    - Execute the example script from the repository root:
      ```bash
-     python examples/prepare.py <model-path> <tp-size> # Load model weights from local SSD to DRAM
+     python examples/prepare_vllm.py <model-path> <tp-size> # Load model weights from local SSD to DRAM
      python examples/offline_infer.py # Transfer the parameters from DRAM to the VRAM registered by the engine, and finally load them into vLLM.
      ```
    - The script first loads weights through BlitzLoad and then evaluates a batch of prompts with vLLM.
