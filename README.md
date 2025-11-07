@@ -1,6 +1,6 @@
 # BlitzLoad:  Accelerate Large Model Cold Start
 
-BlitzLoad is a lightweight model checkpoint loading engine that minimizes the latency of bringing large language models online. It loads model parameters from host DRAM, NVLink/RDMA peers, and local SSDs using a hierarchy-aware highly-optimized multicast plan (described in the BlitzScale system, see https://www.usenix.org/conference/osdi25/presentation/zhang-dingyan). More importantly, it can seamlessly integrate with existing inference stacks such as [vLLM](https://github.com/vllm-project/vllm) and initialize at scale with minimal changes.
+BlitzLoad is a lightweight model checkpoint loading engine that minimizes the latency of bringing large language models online. It loads model parameters from host DRAM, NVLink/RDMA peers, and local SSDs using a hierarchy-aware highly-optimized multicast plan (described in the BlitzScale system, see https://www.usenix.org/conference/osdi25/presentation/zhang-dingyan). More importantly, it can seamlessly integrate with existing inference stacks such as [vLLM](https://github.com/vllm-project/vllm), [ComfyUI](https://github.com/comfyanonymous/ComfyUI) and initialize at scale with minimal changes.
 
 ## Key Capabilities
 - ⚡ **Fast cold starts** through hierarchical weight placement and prefetch pipelines.
