@@ -120,7 +120,7 @@ public:
                            danger_tensor_index_name);
               engine_ptr->mem_to_buffer(danger_tensor_index_name, rank_num);
               // to avoid re-trigger mem_to_buffer
-              task2_model_info.erase(req.task_id);
+              (*task_map).erase(req.task_id);
             }
           } catch (const std::exception &e) {
             spdlog::error("Error in mem_to_buffer: {}", e.what());
@@ -231,10 +231,9 @@ public:
         if (result) {
           spdlog::info("Meta tensor request");
           GetMetaTensorRequest req = json::parse(to_string(msg));
-          auto dangertensor_index_name =
-              gen_dangertensor_index_name(req.file_name, 1, 1);
+          auto [danger_index, _rank_num] = task2_model_info[req.task_id];
           auto meta_tensors =
-              engine_ptr->export_meta_tensors(dangertensor_index_name, 1);
+              engine_ptr->export_meta_tensors(danger_index, req.rank);
           GetMetaTensorResponse resp{meta_tensors};
           auto reply = build_msg(resp);
           meta_tensor_socket.send(reply, zmq::send_flags::none);

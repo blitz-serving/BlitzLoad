@@ -168,10 +168,9 @@ void BlitzEngine::export_meta(std::string danger_tensor_index_name,
 
 std::vector<dangertensor::MetaData>
 BlitzEngine::export_meta_tensors(std::string danger_tensor_index_name,
-                                 int rank_num) {
+                                 int rank) {
   std::vector<string> meta_tensors;
-  LOG_ASSERT(rank_num == 1, "Rank should be 1 in export_meta_tensors");
-  auto danger_tensor = dangertensor_map[danger_tensor_index_name][0].get();
+  auto danger_tensor = dangertensor_map[danger_tensor_index_name][rank].get();
   LOG_ASSERT(danger_tensor != nullptr, "DangerTensor {}:{} not found",
              danger_tensor_index_name, 0);
   return danger_tensor->get_meta_tensors();

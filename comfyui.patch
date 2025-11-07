@@ -1,0 +1,84 @@
+diff --git a/comfy/sd.py b/comfy/sd.py
+index 9e5ebbf1..e9186709 100644
+--- a/comfy/sd.py
++++ b/comfy/sd.py
+@@ -1353,7 +1353,7 @@ def load_diffusion_model_state_dict(sd, model_options={}, metadata=None):
+     if model_options.get("fp8_optimizations", False):
+         model_config.optimizations["fp8"] = True
+ 
+-    model = model_config.get_model(new_sd, "")
++    model = model_config.get_model(new_sd, "", offload_device)
+     model = model.to(offload_device)
+     model.load_model_weights(new_sd, "")
+     left_over = sd.keys()
+diff --git a/comfy/utils.py b/comfy/utils.py
+index 4bd28105..ad06c075 100644
+--- a/comfy/utils.py
++++ b/comfy/utils.py
+@@ -54,6 +54,8 @@ if hasattr(torch.serialization, "add_safe_globals"):  # TODO: this was added in
+ else:
+     logging.info("Warning, you are using an old pytorch version and some ckpt/pt files might be loaded unsafely. Upgrading to 2.4 or above is recommended.")
+ 
++from blitz_lib import comfyui_hook
++@comfyui_hook
+ def load_torch_file(ckpt, safe_load=False, device=None, return_metadata=False):
+     if device is None:
+         device = torch.device("cpu")
+diff --git a/folder_paths.py b/folder_paths.py
+index f110d832..76729711 100644
+--- a/folder_paths.py
++++ b/folder_paths.py
+@@ -19,6 +19,7 @@ if args.base_directory:
+ else:
+     base_path = os.path.dirname(os.path.realpath(__file__))
+ 
++
+ models_dir = os.path.join(base_path, "models")
+ folder_names_and_paths["checkpoints"] = ([os.path.join(models_dir, "checkpoints")], supported_pt_extensions)
+ folder_names_and_paths["configs"] = ([os.path.join(models_dir, "configs")], [".yaml"])
+@@ -135,7 +136,7 @@ def set_user_directory(user_dir: str) -> None:
+     user_directory = user_dir
+ 
+ 
+-#NOTE: used in http server so don't put folders that should not be accessed remotely
++# NOTE: used in http server so don't put folders that should not be accessed remotely
+ def get_directory_by_type(type_name: str) -> str | None:
+     if type_name == "output":
+         return get_output_directory()
+@@ -210,6 +211,8 @@ def exists_annotated_filepath(name) -> bool:
+     filepath = os.path.join(base_dir, name)
+     return os.path.exists(filepath)
+ 
++def get_models_directory() -> str:
++    return models_dir
+ 
+ def add_model_folder_path(folder_name: str, full_folder_path: str, is_default: bool = False) -> None:
+     global folder_names_and_paths
+@@ -278,7 +281,6 @@ def filter_files_extensions(files: Collection[str], extensions: Collection[str])
+     return sorted(list(filter(lambda a: os.path.splitext(a)[-1].lower() in extensions or len(extensions) == 0, files)))
+ 
+ 
+-
+ def get_full_path(folder_name: str, filename: str) -> str | None:
+     """
+     Get the full path of a file in a folder, has to be a file
+diff --git a/main.py b/main.py
+index e1b0f162..ae0f5b7b 100644
+--- a/main.py
++++ b/main.py
+@@ -360,11 +360,15 @@ def start_comfyui(asyncio_loop=None):
+     # Returning these so that other code can integrate with the ComfyUI loop and server
+     return asyncio_loop, prompt_server, start_all
+ 
++import blitz_lib
++import os
+ 
+ if __name__ == "__main__":
+     # Running directly, just start ComfyUI.
+     logging.info("Python version: {}".format(sys.version))
+     logging.info("ComfyUI version: {}".format(comfyui_version.__version__))
++    model_path = folder_paths.get_models_directory() 
++    blitz_lib.pull_diffusion_model(model_path)
+ 
+     if sys.version_info.major == 3 and sys.version_info.minor < 10:
+         logging.warning("WARNING: You are using a python version older than 3.10, please upgrade to a newer one. 3.12 and above is recommended.")

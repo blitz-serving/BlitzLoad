@@ -20,7 +20,7 @@ public:
   void export_meta(std::string danger_tensor_index_name, int rank_num,
                    std::string &meta_str);
   std::vector<dangertensor::MetaData>
-  export_meta_tensors(std::string danger_tensor_index_name, int rank_num);
+  export_meta_tensors(std::string danger_tensor_index_name, int rank);
   void load_file_to_mem(std::string file_name, int rank,
                         std::string danger_tensor_index);
   void mem_to_tensor(cudaIpcMemHandle_t &handle, std::string tensor_name,

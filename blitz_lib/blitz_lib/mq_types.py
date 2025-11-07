@@ -43,8 +43,10 @@ class GetMetaResponse:
     def __init__(self, meta_str):
         self.meta_str = meta_str
 class GetMetaTensorRequest:
-    def __init__(self, file_name):
+    def __init__(self, file_name, task_id, rank):
         self.file_name = file_name
+        self.task_id = task_id
+        self.rank = rank
 class GetMetaTensorResponse:
     def __init__(self, meta_tensors):
         self.meta_tensors = meta_tensors

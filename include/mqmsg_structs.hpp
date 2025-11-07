@@ -67,6 +67,8 @@ struct GetMetaResponse {
 
 struct GetMetaTensorRequest {
   string file_name;
+  string task_id;
+  int rank;
 };
 
 struct GetMetaTensorResponse {
@@ -99,10 +101,13 @@ inline void to_json(json &j, const GetMetaResponse &r) {
 
 inline void from_json(const json &j, GetMetaTensorRequest &r) {
   j.at("file_name").get_to(r.file_name);
+  j.at("task_id").get_to(r.task_id);
+  j.at("rank").get_to(r.rank);
 }
 
 inline void to_json(json &j, const GetMetaTensorRequest &r) {
-  j = json{{"file_name", r.file_name}};
+  j = json{
+      {"file_name", r.file_name}, {"task_id", r.task_id}, {"rank", r.rank}};
 }
 
 inline void from_json(const json &j, GetMetaTensorResponse &r) {

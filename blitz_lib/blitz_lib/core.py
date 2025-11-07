@@ -1,16 +1,13 @@
-import grpc
 import torch
 import ctypes
 import time
-import cProfile, pstats, io
 
 import json
 import functools
 import inspect
 import zmq
-from multiprocessing import Manager, Process
-import ast
 from . import mq_types
+import numpy as np
 
 from multiprocessing import shared_memory
 
@@ -23,6 +20,7 @@ LIB_TIME = 0
 PORT = 45555
 SHM_NAME = "task_id_test"
 HEADER_SIZE = 8
+MAX_BATCH_BYTES = 512 * 1024 * 1024
 
 
 class MqInfo:
@@ -35,7 +33,10 @@ _zmq_sockets: dict[int, MqInfo] = {}
 _zmq_clients_lock = Lock()
 
 _rank_info: dict[str, int] = {}  # proc_id: rank
-profiler = cProfile.Profile()
+
+_model_patcher_map: dict[str, callable] = {}
+
+# profiler = cProfile.Profile()
 
 # context = zmq.Context()
 
@@ -51,18 +52,17 @@ server_addr_map = {
 }
 
 dtype_map = {
-    "torch.float32": torch.float32,
-    "torch.float": torch.float32,
-    "torch.float16": torch.float16,
-    "torch.bfloat16": torch.bfloat16,
-    "torch.int64": torch.int64,
-    "torch.int32": torch.int32,
-    "torch.float8_e4m3fn": torch.float8_e4m3fn,
+    "torch.float32": (torch.float32, 4),
+    "torch.float": (torch.float32, 4),
+    "torch.float16": (torch.float16, 2),
+    "torch.bfloat16": (torch.bfloat16, 2),
+    "torch.int64": (torch.int64, 8),
+    "torch.int32": (torch.int32, 4),
+    "torch.float8_e4m3fn": (torch.float8_e4m3fn, 1),
 }
 
 # 需要清除的代理环境变量列表
 proxy_vars = [
-    "HTTP_PROXY",
     "http_proxy",
     "HTTPS_PROXY",
     "https_proxy",
@@ -85,14 +85,6 @@ except ImportError:
     HAS_CUPY = False
 
 
-def register_fork_handler(channel):
-    def _fork_post_child():
-        channel.close()
-        grpc._cygrpc.terminate()
-        print("Child process: gRPC resources destroyed")
-
-    os.register_at_fork(after_in_child=_fork_post_child)
-
 
 def register_rank(rank: int):
     proc_id = os.getpid()
@@ -103,6 +95,10 @@ def register_rank(rank: int):
 def get_rank():
     proc_id = os.getpid()
     return _rank_info[proc_id]
+
+
+def register_model_patcher(ckpt_path: str, patcher: callable):
+    _model_patcher_map[ckpt_path] = patcher
 
 
 def _parse_shape(shape_str: str):
@@ -225,8 +221,11 @@ def pull_model(model_name: str, world_size: int, tp_size: int, pp_size: int):
     )
     resp_dict = _send_recv(socket, req)
     task_id = resp_dict["task_id"]
-    shm = shared_memory.SharedMemory(name=SHM_NAME, create=True, size=1024 * 1024)
-    d = {"model_name": task_id}
+    try:
+        shm = shared_memory.SharedMemory(name=SHM_NAME, create=True, size=1024 * 1024)
+    except FileExistsError:
+        shm = shared_memory.SharedMemory(name=SHM_NAME, create=False)
+    d = {model_name: task_id}
     b = json.dumps(d).encode("utf-8")
     payload_size = len(b)
     shm.buf[:HEADER_SIZE] = payload_size.to_bytes(HEADER_SIZE, byteorder="little")
@@ -239,8 +238,10 @@ def pull_diffusion_model(directory: str):
     register_rank(0)
     file_names = recursive_walk_through_directory(directory)
     print(file_names)
-
-    shm = shared_memory.SharedMemory(name=SHM_NAME, create=True, size=1024 * 1024)
+    try:
+        shm = shared_memory.SharedMemory(name=SHM_NAME, create=True, size=1024 * 1024)
+    except FileExistsError:
+        shm = shared_memory.SharedMemory(name=SHM_NAME, create=False)
     d = {}
     # print(file_names)
     for file_name in file_names:
@@ -290,9 +291,16 @@ def load_meta(file_name):
     return resp_dict["meta_str"]
 
 
-def _load_tensor_meta(file_name):
+def load_tensor_meta(file_name):
     socket = _get_socket(server_addr=server_addr_map["load_tensor_meta"])
-    req = mq_types.GetMetaTensorRequest(file_name=file_name)
+    # get file_name's task_id
+    shm = shared_memory.SharedMemory(name=SHM_NAME)
+    payload_size = int.from_bytes(shm.buf[:HEADER_SIZE], byteorder="little")
+    b = shm.buf[int(HEADER_SIZE): int(HEADER_SIZE) + payload_size].tobytes()
+    d = json.loads(b)
+    task_id = d.get(file_name, "")
+    rank = get_rank()
+    req = mq_types.GetMetaTensorRequest(file_name=file_name, task_id=task_id, rank=rank)
     resp_dict = _send_recv(socket, req)
     return resp_dict["meta_tensors"]
 
@@ -358,6 +366,8 @@ def comfyui_hook(func):
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
+        time0 = 0
+        time0_s = time.time()
         bound = sig.bind(*args, **kwargs)
         bound.apply_defaults()
 
@@ -374,18 +384,29 @@ def comfyui_hook(func):
 
         print(f"Loading dangertensor from {ckpt_file} to device {device}")
         sd = {}
-
-        tensor_name_vec = _load_tensor_meta(file_name=ckpt_file)
-        print(tensor_name_vec[0])
-        for item in tensor_name_vec:  # datalength = nele * ele_size
+        s = time.time()
+        tensor_name_vec = load_tensor_meta(file_name=ckpt_file)
+        print(f"Load meta time: {time.time() - s}")
+        total_bytes = sum(np.prod(_parse_shape(item['shape'])) * dtype_map[item["dtype"]][1] for item in tensor_name_vec)
+        buffer = torch.empty(size=(total_bytes,), dtype=torch.uint8, device='cuda:0')
+        offset = 0
+        for item in tensor_name_vec:
             name = item['name']
-            shape = item['shape']
-            shape = _parse_shape(shape)
-            dtype = dtype_map[item["dtype"]]
-            tensor = torch.empty(size=torch.Size(shape), dtype=dtype, device='cuda:0')
+            shape = _parse_shape(item['shape'])
+            dtype, _element_size = dtype_map[item["dtype"]]
+            numel = np.prod(shape)
+            bytes_needed = numel * _element_size
+            if offset + bytes_needed > total_bytes:
+                raise MemoryError(f"Not enough buffer size for tensor {name}")
+            tensor = buffer[offset:offset + bytes_needed].view(dtype).reshape(shape)
             load_tensor(tensor, name)
             sd[name] = tensor
+            offset += bytes_needed
+        
+        print(f"Load {ckpt_file} done, spend {time.time() - s} seconds")
 
+
+        print(f"Total load time: {time.time() - time0_s}")
         if return_meta:
             safetensor_file_meta = load_meta(file_name=ckpt_file)
         else:

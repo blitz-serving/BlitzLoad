@@ -157,7 +157,7 @@ def process_and_write_tensors(
                         (
                             name,
                             tensor.element_size() * tensor.nelement(),
-                            tensor.nelement(),
+                            tensor.shape,
                             str(tensor.dtype),
                         )
                     )
@@ -174,8 +174,9 @@ def process_and_write_tensors(
                 print("==========================")
             with open(meta_file, "w") as ff:
                 ff.write(f"{len(tensor_vec)}\n")
-                for name, size, nelems, dtype in tensor_vec:
-                    ff.write(f"{name} {size} {nelems} {dtype}\n")
+                for name, size, shape, dtype in tensor_vec:
+                    shape = re.sub(r"\s+", "", str(shape))
+                    ff.write(f"{name} {size} {shape} {dtype}\n")
                 tensor_vec = []
 
 
