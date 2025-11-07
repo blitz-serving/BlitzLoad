@@ -29,22 +29,14 @@ def extract_layer_id(tensor_name: str):
     else:
         raise "Cannot extract layer id"
 
+
 def process_and_write_tensors(
     directory,
     output_path,
     safetensor_files,
     tp_size: int,
-    stacked_params_mapping: List[tuple]
+    stacked_params_mapping: List[tuple],
 ):
-    """
-    读取指定目录下所有 safetensors 文件，转置所有 2D 张量，并按指定顺序写入二进制文件。
-
-    Args:
-        directory (str): 包含 safetensors 文件的目录。
-        output_file (str): 输出二进制文件的路径。
-        tensor_order (list): 张量名称的顺序，用于写入文件。
-    """
-
     tensor_vec = []
     all_tensors = {}
     all_tensors_name = []
@@ -92,7 +84,7 @@ def process_and_write_tensors(
                 tensors = []
                 is_stacked_param = False
                 print(f"[INIT] Name: {tensor_name}, shape: {tensor.shape}")
-                
+
                 # check if name matches stacked params
                 for param_name, shard_name, shard_id in stacked_params_mapping:
                     if shard_name in tensor_name:
@@ -102,11 +94,19 @@ def process_and_write_tensors(
                         if shard_id == "q":
                             # is qkv
                             q_tensor_slice = tensor.chunk(tp_size, dim=0)[tp_rank]
-                            k_tensor_slice = all_tensors[tensor_name.replace("q_proj", "k_proj")].chunk(tp_size, dim=0)[tp_rank]
-                            v_tensor_slice = all_tensors[tensor_name.replace("q_proj", "v_proj")].chunk(tp_size, dim=0)[tp_rank]
-                            result = torch.cat([q_tensor_slice, k_tensor_slice, v_tensor_slice], dim=0)
+                            k_tensor_slice = all_tensors[
+                                tensor_name.replace("q_proj", "k_proj")
+                            ].chunk(tp_size, dim=0)[tp_rank]
+                            v_tensor_slice = all_tensors[
+                                tensor_name.replace("q_proj", "v_proj")
+                            ].chunk(tp_size, dim=0)[tp_rank]
+                            result = torch.cat(
+                                [q_tensor_slice, k_tensor_slice, v_tensor_slice], dim=0
+                            )
                             result = result.contiguous()
-                            tensors.append((tensor_name.replace("q_proj", "v_proj"), result))
+                            tensors.append(
+                                (tensor_name.replace("q_proj", "v_proj"), result)
+                            )
                         elif shard_id == "0":
                             # gate_up or something else
                             # get all slices taht share one param_name
@@ -115,16 +115,25 @@ def process_and_write_tensors(
                             for pn, sn, sid in stacked_params_mapping:
                                 if pn == param_name:
                                     t = all_tensors[tensor_name.replace(shard_name, sn)]
-                                    tensor_slices.append(t.chunk(tp_size, dim=0)[tp_rank])
+                                    tensor_slices.append(
+                                        t.chunk(tp_size, dim=0)[tp_rank]
+                                    )
                                     last_name = sn
                             # sort tensor_slices by shard_id
-                            tensor_slices = sorted(tensor_slices, key=lambda x: [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", sn)])
+                            tensor_slices = sorted(
+                                tensor_slices,
+                                key=lambda x: [
+                                    int(t) if t.isdigit() else t
+                                    for t in re.split(r"(\d+)", sn)
+                                ],
+                            )
                             # concat all slices
                             result = torch.cat(tensor_slices, dim=0)
                             result = result.contiguous()
-                            tensors.append((tensor_name.replace(shard_name, last_name), result))
-                            
-                            
+                            tensors.append(
+                                (tensor_name.replace(shard_name, last_name), result)
+                            )
+
                 if is_stacked_param is False:
                     if any(x in tensor_name for x in tp_params_dim0):
                         # should slice
@@ -144,7 +153,14 @@ def process_and_write_tensors(
                     print(
                         f"Tensor {name} ele_size {tensor.element_size()} n {tensor.nelement()}"
                     )
-                    tensor_vec.append((name, tensor.element_size() * tensor.nelement()))
+                    tensor_vec.append(
+                        (
+                            name,
+                            tensor.element_size() * tensor.nelement(),
+                            tensor.shape,
+                            str(tensor.dtype),
+                        )
+                    )
                     try:
                         uint8_tensor = tensor.view(torch.uint8)
                     except Exception:
@@ -158,16 +174,24 @@ def process_and_write_tensors(
                 print("==========================")
             with open(meta_file, "w") as ff:
                 ff.write(f"{len(tensor_vec)}\n")
-                for name, size in tensor_vec:
-                    ff.write(f"{name} {size}\n")
+                for name, size, shape, dtype in tensor_vec:
+                    shape = re.sub(r"\s+", "", str(shape))
+                    ff.write(f"{name} {size} {shape} {dtype}\n")
                 tensor_vec = []
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", type=str, required=True, help="model-path")
-    parser.add_argument("--output-path", type=str, required=True, help="output-path, can be equal to model-path")
-    parser.add_argument("--tp-size", type=int, required=True, help="tensor parallel size")
+    parser.add_argument(
+        "--output-path",
+        type=str,
+        required=True,
+        help="output-path, can be equal to model-path",
+    )
+    parser.add_argument(
+        "--tp-size", type=int, required=True, help="tensor parallel size"
+    )
     args = parser.parse_args()
     model_path = args.model_path
     output_path = args.output_path

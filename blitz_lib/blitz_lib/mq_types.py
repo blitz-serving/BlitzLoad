@@ -7,6 +7,9 @@ class PullModelRequest:
 class PullModelResponse:
     def __init__(self, task_id):
         self.task_id = task_id
+class PullDiffusionModelRequest:
+    def __init__(self, file_name):
+        self.file_name = file_name
 class CheckModelRequest:
     def __init__(self, model_name, task_id):
         self.model_name = model_name
@@ -33,6 +36,20 @@ class RevertHandlerRequest:
 class RevertHandlerResponse:
     def __init__(self, success):
         self.success = success
+class GetMetaRequest:
+    def __init__(self, file_name):
+        self.file_name = file_name
+class GetMetaResponse:
+    def __init__(self, meta_str):
+        self.meta_str = meta_str
+class GetMetaTensorRequest:
+    def __init__(self, file_name, task_id, rank):
+        self.file_name = file_name
+        self.task_id = task_id
+        self.rank = rank
+class GetMetaTensorResponse:
+    def __init__(self, meta_tensors):
+        self.meta_tensors = meta_tensors
 class ResetStatusRequest:
     def __init__(self, rank):
         self.rank = rank

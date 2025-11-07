@@ -1,21 +1,18 @@
 #include "logger.h"
+#include "spdlog/fmt/bundled/format.h"
 #include "spdlog/spdlog.h"
 #include <atomic>
 #include <blitz_engine.h>
 #include <chrono>
 #include <common_tools.hpp>
 #include <cstddef>
-#include <cstdint>
 #include <cstdlib>
-#include <filesystem>
-#include <iomanip>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <mqmsg_structs.hpp>
 #include <nlohmann/json.hpp>
 #include <openssl/sha.h>
-#include <regex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -31,39 +28,50 @@ void signal_handler(int) { running = false; }
 
 class Mq_Server {
 public:
-  Mq_Server(std::vector<int> devices, size_t buffer_size) {
+  Mq_Server(std::vector<int> devices, size_t buffer_size, int port = 55555) {
     engine_ptr = std::make_unique<blitz::BlitzEngine>(devices, buffer_size);
     task_map = std::make_unique<std::map<string, bool>>();
+    this->port = port;
   }
 
   void run() {
     zmq::context_t ctx(1);
 
     zmq::socket_t pull_model_socket(ctx, zmq::socket_type::rep);
-    pull_model_socket.bind("tcp://*:55555");
+    pull_model_socket.bind(fmt::format("tcp://*:{}", port));
 
     zmq::socket_t check_model_socket(ctx, zmq::socket_type::rep);
-    check_model_socket.bind("tcp://*:55556");
+    check_model_socket.bind(fmt::format("tcp://*:{}", port + 1));
 
     zmq::socket_t load_socket(ctx, zmq::socket_type::rep);
-    load_socket.bind("tcp://*:55557");
+    load_socket.bind(fmt::format("tcp://*:{}", port + 2));
 
     zmq::socket_t revert_socket(ctx, zmq::socket_type::rep);
-    revert_socket.bind("tcp://*:55558");
+    revert_socket.bind(fmt::format("tcp://*:{}", port + 3));
 
     zmq::socket_t reset_socket(ctx, zmq::socket_type::rep);
-    reset_socket.bind("tcp://*:55559");
+    reset_socket.bind(fmt::format("tcp://*:{}", port + 4));
 
-    zmq::pollitem_t items[] = {
-        {pull_model_socket, 0, ZMQ_POLLIN, 0},
-        {check_model_socket, 0, ZMQ_POLLIN, 0},
-        {load_socket, 0, ZMQ_POLLIN, 0},
-        {revert_socket, 0, ZMQ_POLLIN, 0},
-        {reset_socket, 0, ZMQ_POLLIN, 0},
-    };
+    zmq::socket_t pull_model_diffusion_socket(ctx, zmq::socket_type::rep);
+    pull_model_diffusion_socket.bind(fmt::format("tcp://*:{}", port + 5));
+
+    zmq::socket_t meta_socket(ctx, zmq::socket_type::rep);
+    meta_socket.bind(fmt::format("tcp://*:{}", port + 6));
+
+    zmq::socket_t meta_tensor_socket(ctx, zmq::socket_type::rep);
+    meta_tensor_socket.bind(fmt::format("tcp://*:{}", port + 7));
+
+    zmq::pollitem_t items[] = {{pull_model_socket, 0, ZMQ_POLLIN, 0},
+                               {check_model_socket, 0, ZMQ_POLLIN, 0},
+                               {load_socket, 0, ZMQ_POLLIN, 0},
+                               {revert_socket, 0, ZMQ_POLLIN, 0},
+                               {reset_socket, 0, ZMQ_POLLIN, 0},
+                               {pull_model_diffusion_socket, 0, ZMQ_POLLIN, 0},
+                               {meta_socket, 0, ZMQ_POLLIN, 0},
+                               {meta_tensor_socket, 0, ZMQ_POLLIN, 0}};
 
     while (running) {
-      zmq::poll(items, 5, std::chrono::milliseconds(-1));
+      zmq::poll(items, 8, std::chrono::milliseconds(-1));
 
       if (items[0].revents & ZMQ_POLLIN) {
         zmq::message_t msg;
@@ -108,9 +116,11 @@ public:
                 task2_model_info.count(req.task_id)) {
               auto [danger_tensor_index_name, rank_num] =
                   task2_model_info[req.task_id];
+              spdlog::info("Trigger mem_to_buffer of {}",
+                           danger_tensor_index_name);
               engine_ptr->mem_to_buffer(danger_tensor_index_name, rank_num);
               // to avoid re-trigger mem_to_buffer
-              task2_model_info.erase(req.task_id);
+              (*task_map).erase(req.task_id);
             }
           } catch (const std::exception &e) {
             spdlog::error("Error in mem_to_buffer: {}", e.what());
@@ -169,6 +179,68 @@ public:
           spdlog::error("Receive Revert Tensor Req Failed");
         }
       }
+
+      if (items[5].revents & ZMQ_POLLIN) {
+        zmq::message_t msg;
+        auto result = pull_model_diffusion_socket.recv(msg);
+
+        if (result) {
+          spdlog::info("Pull model diffusion request");
+          PullDiffusionModelRequest req = json::parse(to_string(msg));
+          auto id = gen_sha256(req.file_name);
+          (*task_map)[id] = false;
+          std::thread([req, id, this] {
+            auto dangertensor_index_name =
+                gen_dangertensor_index_name(req.file_name, 1, 1);
+            task2_model_info[id] = {dangertensor_index_name, 1};
+            engine_ptr->load_file_to_mem(req.file_name, 0,
+                                         dangertensor_index_name);
+            (*task_map)[id] = true;
+          }).detach();
+
+          PullModelResponse resp{id};
+          auto reply = build_msg(resp);
+          pull_model_diffusion_socket.send(reply, zmq::send_flags::none);
+        } else {
+          spdlog::error("Receive Pull Model Diffusion Req Failed");
+        }
+      }
+      if (items[6].revents & ZMQ_POLLIN) {
+        zmq::message_t msg;
+        auto result = meta_socket.recv(msg);
+
+        if (result) {
+          spdlog::info("Meta Info request");
+          GetMetaRequest req = json::parse(to_string(msg));
+          auto dangertensor_index_name =
+              gen_dangertensor_index_name(req.file_name, 1, 1);
+          std::string meta_str = "";
+          engine_ptr->export_meta(dangertensor_index_name, 1, meta_str);
+          GetMetaResponse resp{meta_str};
+          auto reply = build_msg(resp);
+          meta_socket.send(reply, zmq::send_flags::none);
+        } else {
+          spdlog::error("Receive Meta Req Failed");
+        }
+      }
+
+      if (items[7].revents & ZMQ_POLLIN) {
+        zmq::message_t msg;
+        auto result = meta_tensor_socket.recv(msg);
+
+        if (result) {
+          spdlog::info("Meta tensor request");
+          GetMetaTensorRequest req = json::parse(to_string(msg));
+          auto [danger_index, _rank_num] = task2_model_info[req.task_id];
+          auto meta_tensors =
+              engine_ptr->export_meta_tensors(danger_index, req.rank);
+          GetMetaTensorResponse resp{meta_tensors};
+          auto reply = build_msg(resp);
+          meta_tensor_socket.send(reply, zmq::send_flags::none);
+        } else {
+          spdlog::error("Receive Meta Tensor Req Failed");
+        }
+      }
     }
   }
 
@@ -176,6 +248,7 @@ private:
   std::unique_ptr<blitz::BlitzEngine> engine_ptr;
   std::unique_ptr<std::map<std::string, bool>> task_map;
   std::map<std::string, std::pair<std::string, int>> task2_model_info;
+  int port;
   // std::atomic<int> load_revert_cnt = 0;
 };
 
@@ -196,6 +269,7 @@ std::vector<int> parse_devices(const std::string &devices_str) {
 
 int main(int argc, char *argv[]) {
   std::vector<int> devices;
+  int port = 55555;
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
 
@@ -209,6 +283,16 @@ int main(int argc, char *argv[]) {
     } else if (arg.rfind("--devices=", 0) == 0) {
       devices = parse_devices(arg.substr(10));
     }
+
+    if (arg == "--port") {
+      // start port, default port is 55555
+      try {
+        port = stoi(argv[++i]);
+      } catch (const std::invalid_argument &) {
+        std::cerr << "Invalid port number: " << argv[i] << std::endl;
+        return 1;
+      }
+    }
   }
 
   if (devices.empty()) {
@@ -216,7 +300,7 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
-  auto server = Mq_Server(devices, 512 * 1024 * 1024);
+  auto server = Mq_Server(devices, 512 * 1024 * 1024, port);
   server.run();
   return 0;
 }

@@ -129,22 +129,51 @@ int BlitzEngine::pull_model(std::string model_name_or_path, int tp_size,
       }
     }
     for (auto [rank, entry_name] : rank_file_map) {
-      // load files
-      auto bin_file = entry_name;
-      auto meta_file = bin_file;
-      auto pos = meta_file.rfind('.');
-      meta_file.replace(pos + 1, meta_file.size() - pos - 1, "meta");
-      auto danger_tensor =
-          dangertensor_map[danger_tensor_index_name][rank].get();
-      danger_tensor->load_meta_from_ssd(meta_file);
-      danger_tensor->load_data_from_ssd(bin_file);
-      spdlog::info("{} load done", bin_file);
+      load_file_to_mem(entry_name, rank, danger_tensor_index_name);
     }
   } catch (const std::exception &e) {
     spdlog::error("Error: {}", e.what());
   }
   spdlog::info("Load done");
   return rank_num;
+}
+
+void BlitzEngine::load_file_to_mem(std::string file, int rank,
+                                   std::string dangertensor_index) {
+  auto bin_file = file;
+  auto meta_file = bin_file;
+  auto pos = meta_file.rfind('.');
+  meta_file.replace(pos + 1, meta_file.size() - pos - 1, "meta");
+  auto danger_tensor = dangertensor_map[dangertensor_index][rank].get();
+  if (danger_tensor == nullptr) {
+    dangertensor_map[dangertensor_index][rank] =
+        std::make_unique<dangertensor::DangerTensor>();
+    danger_tensor = dangertensor_map[dangertensor_index][rank].get();
+  }
+  danger_tensor->load_meta_from_ssd(meta_file);
+  danger_tensor->load_data_from_ssd(bin_file);
+  spdlog::info("{} load done", bin_file);
+}
+
+void BlitzEngine::export_meta(std::string danger_tensor_index_name,
+                              int rank_num, std::string &meta_str) {
+
+  for (int rank = 0; rank < rank_num; rank++) {
+    auto danger_tensor = dangertensor_map[danger_tensor_index_name][rank].get();
+    LOG_ASSERT(danger_tensor != nullptr, "DangerTensor {}:{} not found",
+               danger_tensor_index_name, rank);
+    meta_str = danger_tensor->get_meta();
+  }
+}
+
+std::vector<dangertensor::MetaData>
+BlitzEngine::export_meta_tensors(std::string danger_tensor_index_name,
+                                 int rank) {
+  std::vector<string> meta_tensors;
+  auto danger_tensor = dangertensor_map[danger_tensor_index_name][rank].get();
+  LOG_ASSERT(danger_tensor != nullptr, "DangerTensor {}:{} not found",
+             danger_tensor_index_name, 0);
+  return danger_tensor->get_meta_tensors();
 }
 
 BlitzEngine::~BlitzEngine() {

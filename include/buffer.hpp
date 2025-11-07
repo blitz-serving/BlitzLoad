@@ -62,11 +62,10 @@ public:
       return status;
     }
     status = LOADING;
-    auto [new_loaded_size, loaded_sizes_, ended] = source.mem_to_buffer(
+    auto [new_loaded_size, ended] = source.mem_to_buffer(
         buffer_ptr, buffer_size, buffer_group_read_size, buffer_idx, device);
     this->local_usable_size += new_loaded_size;
     this->local_used_size = 0;
-    this->loaded_sizes = loaded_sizes_;
     buffer_group_read_size += new_loaded_size;
     cudaStreamSynchronize(0);
     status = READY;
@@ -91,15 +90,6 @@ public:
     auto load_tensor_size = tensor_size;
     if (tensor_size > buffer_size) {
       load_tensor_size = buffer_size;
-    }
-    auto should_load_size = std::move(loaded_sizes.front());
-    loaded_sizes.erase(loaded_sizes.begin());
-
-    if (should_load_size < load_tensor_size) {
-      spdlog::info("[Buffer {}:{}] Tensor size is larger 0x{:x} > 0x{:x}",
-                   device, buffer_idx, load_tensor_size, should_load_size);
-      load_tensor_size = should_load_size;
-      tensor_size_too_large = true;
     }
 
     LOG_ASSERT(
@@ -155,7 +145,6 @@ private:
   int buffer_idx = 0;
   void *buffer_ptr;
   const size_t buffer_size;
-  std::vector<size_t> loaded_sizes;
   std::atomic<Status> status = EMPTY;
   std::atomic<size_t> local_usable_size = 0, local_used_size = 0,
                       planned_used_size = 0;
